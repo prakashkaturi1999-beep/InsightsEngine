@@ -354,4 +354,34 @@ export const workspaces: WorkspaceCard[] = [
 
 export const orgPerformance = []; // Deprecated
 export const governanceSnapshot = { activeUsers: 4500, pendingRequests: 125, orgAdmins: 80, locationManagers: 1200, crossBrandAccess: 45, financeAccess: 380, hrAccess: 210, riskyCombos: 15, needReview: 42, inactiveUsers: 215 };
-export const accessRequests = [];
+export type AccessRequest = {
+  id: string;
+  name: string;
+  scope: string;
+  requestedRole: Role;
+  requestedModules: string[];
+};
+
+export const accessRequests: AccessRequest[] = [
+  {
+    id: "req_1",
+    name: "John Smith",
+    scope: "Zenith Hospitality > All Brands",
+    requestedRole: "BrandAdmin",
+    requestedModules: ["Sales", "Finance"],
+  },
+  {
+    id: "req_2",
+    name: "Sarah Connor",
+    scope: "Craven Wings Downtown",
+    requestedRole: "LocationManager",
+    requestedModules: ["Inventory", "HR"],
+  },
+  {
+    id: "req_3",
+    name: "Mike Wazowski",
+    scope: "Summit Food Co > Peak Steakhouse",
+    requestedRole: "Analyst",
+    requestedModules: ["Sales", "Orders"],
+  },
+];
