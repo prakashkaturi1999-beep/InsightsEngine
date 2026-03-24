@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import Link from "next/link";
+import { BurgerNav } from "@/components/executive/BurgerNav";
 import { FilterBar, type FilterConfig } from "@/components/ui/FilterBar";
 
 type Props = {
@@ -49,16 +50,16 @@ export default function SupplyLayout({ children }: Props) {
   return (
     <div className="flex min-h-screen">
       <aside className="hidden md:flex w-64 flex-col border-r border-slate-200 bg-white/90 backdrop-blur-sm">
-        <div className="flex items-center gap-2 px-6 py-5 border-b border-slate-100">
-          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-400 to-indigo-600 shadow-sm" />
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
-              Insight Engine
+        <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
+          <BurgerNav />
+          <Link href="/" className="flex items-center gap-2.5 group" aria-label="Home">
+            <div className="h-9 w-9 rounded-xl flex-shrink-0 bg-gradient-to-br from-violet-400 to-indigo-600 shadow-sm" />
+            <div>
+              <span className="block text-xs uppercase tracking-[0.18em] text-slate-400 group-hover:text-slate-600 transition-colors">
+                Insights Engine
+              </span>
             </div>
-            <div className="text-sm font-semibold text-slate-900">
-              Supply Domain
-            </div>
-          </div>
+          </Link>
         </div>
         <nav className="flex-1 space-y-1 px-3 py-4 text-sm">
           {supplyLinks.map((item) => (

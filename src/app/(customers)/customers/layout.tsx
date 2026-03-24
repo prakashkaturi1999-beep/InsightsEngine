@@ -3,6 +3,7 @@
 import { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BurgerNav } from "@/components/executive/BurgerNav";
 import { CustomerFilterProvider, useCustomerFilters } from "@/lib/customerFilterContext";
 import { ExecutiveScopeProvider, useExecutiveScope } from "@/components/executive/ExecutiveScopeProvider";
 import { currentScope, hierarchy } from "@/lib/executiveMock";
@@ -42,14 +43,18 @@ function CustomerShell({ children }: { children: ReactNode }) {
 
       <header className="sticky top-0 z-40 border-b border-slate-200/60 bg-white/90 backdrop-blur-xl">
         <div className="flex items-center justify-between gap-4 px-6 h-16">
-          <Link href="/" className="flex items-center gap-2.5 group flex-shrink-0" aria-label="Home">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-700 text-white shadow-md group-hover:shadow-lg transition-shadow">
-              <Zap size={16} className="text-amber-400" />
-            </div>
-            <span className="text-[15px] font-bold tracking-tight text-slate-900 group-hover:text-slate-700 transition-colors hidden sm:inline">
-              Insights Engine
-            </span>
-          </Link>
+          {/* Left: Burger + Logo */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <BurgerNav />
+            <Link href="/" className="flex items-center gap-2.5 group" aria-label="Home">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-700 text-white shadow-md group-hover:shadow-lg transition-shadow">
+                <Zap size={16} className="text-amber-400" />
+              </div>
+              <span className="text-[15px] font-bold tracking-tight text-slate-900 group-hover:text-slate-700 transition-colors hidden sm:inline">
+                Insights Engine
+              </span>
+            </Link>
+          </div>
 
           <div className="flex items-center gap-2 flex-1 justify-center flex-wrap">
             <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 lg:py-2">

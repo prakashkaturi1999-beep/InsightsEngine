@@ -3,7 +3,6 @@
 
 import { useState } from "react";
 import { TopNav } from "@/components/executive/TopNav";
-import { BurgerNav } from "@/components/executive/BurgerNav";
 import {
   ExecutiveScopeProvider,
   useExecutiveScope,
@@ -56,7 +55,7 @@ function ExecutiveLandingBody() {
     .filter((ws) => ws.status !== "healthy" || ws.note)
     .sort((a, b) => {
       const order = { atRisk: 0, watch: 1, healthy: 2 };
-      return order[a.status] - order[b.status];
+      return order[a.status as keyof typeof order] - order[b.status as keyof typeof order];
     });
 
   return (
@@ -80,9 +79,6 @@ function ExecutiveLandingBody() {
       <main className="mx-auto max-w-[1600px] px-6 py-6 space-y-6">
         {/* Page header row */}
         <div className="flex items-center gap-4">
-          {/* Burger menu */}
-          <BurgerNav />
-
           <div>
             <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
               Executive View
