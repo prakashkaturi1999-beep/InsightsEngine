@@ -3,12 +3,22 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import type { DomainType, PermissionLevel, UserRole, UserStatus } from "@/lib/adminStore";
 
+export type ViewerRole = "Super Admin" | "Owner";
+
 export type AdminFilters = {
   search: string;
   status: UserStatus | "All Statuses";
   role: UserRole | "All Roles";
   domain: DomainType | "All Domains";
   level: PermissionLevel | "All Levels";
+  /** Global page-level scope filter — org */
+  filterOrg: string;
+  /** Global page-level scope filter — brand (cascades from filterOrg) */
+  filterBrand: string;
+  /** Global page-level scope filter — location (cascades from filterBrand) */
+  filterLocation: string;
+  /** Whose perspective is the admin looking from */
+  viewerRole: ViewerRole;
 };
 
 type AdminFilterContextValue = {
@@ -17,12 +27,16 @@ type AdminFilterContextValue = {
   resetFilters: () => void;
 };
 
-const DEFAULT_FILTERS: AdminFilters = {
+export const DEFAULT_FILTERS: AdminFilters = {
   search: "",
   status: "All Statuses",
   role: "All Roles",
   domain: "All Domains",
   level: "All Levels",
+  filterOrg: "All Organisations",
+  filterBrand: "All Brands",
+  filterLocation: "All Locations",
+  viewerRole: "Super Admin",
 };
 
 const AdminFilterContext = createContext<AdminFilterContextValue | null>(null);

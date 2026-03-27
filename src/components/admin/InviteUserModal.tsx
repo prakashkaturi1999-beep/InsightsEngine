@@ -37,6 +37,7 @@ export function InviteUserModal({ open, onClose }: Props) {
     addUser({
       firstName, lastName, email, role,
       scope: { org, brand, location },
+      scopeList: [{ org, brand, location }],
       permissions: { ...defaultPermissions[role] },
       status: "Pending"
     });

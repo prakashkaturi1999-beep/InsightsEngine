@@ -1,10 +1,9 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
-import { useExecutiveScope } from "@/components/executive/ExecutiveScopeProvider";
 import { UserDetailDrawer } from "@/components/admin/UserDetailDrawer";
 import { InviteUserModal } from "@/components/admin/InviteUserModal";
-import { useAdminFilters } from "@/lib/adminFilterContext";
+import { useAdminFilters, type ViewerRole } from "@/lib/adminFilterContext";
 import {
   useAdminStore,
   type AccessRequest,
@@ -14,18 +13,32 @@ import {
   type UserRole,
   type UserStatus,
 } from "@/lib/adminStore";
-import { formatScopeLabel, scopeIntersectsSelection } from "@/lib/adminScopeUtils";
+import {
+  formatScopeLabel,
+  formatScopeListLabel,
+  getFilterBarOptions,
+  multiScopeIntersectsSelection,
+  userBelongsToOrg,
+  ALL_ORGANISATIONS,
+} from "@/lib/adminScopeUtils";
 import {
   Ban,
+  Building2,
   Check,
+  ChevronDown,
   FilterX,
   KeyRound,
   Mail,
+  MapPin,
   Shield,
   ShieldAlert,
+  Tag,
   UserCheck,
   UserPlus,
+  X,
 } from "lucide-react";
+
+const OWNER_ORG = "Craven Group"; // default owner org for "Owner" role simulation
 
 const DOMAINS: DomainType[] = [
   "Finance",
@@ -74,13 +87,18 @@ export default function AccessGovernancePage() {
     resendInvites,
     suspendUser,
   } = useAdminStore();
-  const { scope } = useExecutiveScope();
   const { filters, setFilters, resetFilters } = useAdminFilters();
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeUserId, setActiveUserId] = useState<string | null>(null);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [bulkRole, setBulkRole] = useState<UserRole>("General Manager");
+
+  // Cascade-aware dropdown options for the global filter bar
+  const filterBarOptions = useMemo(
+    () => getFilterBarOptions(filters.filterOrg, filters.filterBrand),
+    [filters.filterOrg, filters.filterBrand]
+  );
 
   const pendingRequests = useMemo(
     () => accessRequests.filter((request) => request.status === "Pending"),
@@ -94,13 +112,33 @@ export default function AccessGovernancePage() {
     }, {});
   }, [pendingRequests]);
 
+  // The "selected scope" from the page-level filter bar
+  const pageScope = useMemo(
+    () => ({
+      org: filters.filterOrg,
+      brand: filters.filterBrand,
+      location: filters.filterLocation,
+    }),
+    [filters.filterOrg, filters.filterBrand, filters.filterLocation]
+  );
+
   const filteredUsers = useMemo(() => {
     return users.filter((user) => {
-      if (!scopeIntersectsSelection(user.scope, scope)) return false;
+      const scopeList = user.scopeList ?? [user.scope];
 
+      // 1. Multi-scope intersection against the page filter bar scope
+      if (!multiScopeIntersectsSelection(scopeList, pageScope)) return false;
+
+      // 2. Viewer role restriction: Owner can only see their own org's users
+      if (filters.viewerRole === "Owner") {
+        if (!userBelongsToOrg(scopeList, OWNER_ORG)) return false;
+      }
+
+      // 3. Status / role filters
       if (filters.status !== "All Statuses" && user.status !== filters.status) return false;
       if (filters.role !== "All Roles" && user.role !== filters.role) return false;
 
+      // 4. Domain / level filters
       if (filters.domain !== "All Domains") {
         if (filters.level === "All Levels") {
           if (user.permissions[filters.domain] === "None") return false;
@@ -112,21 +150,27 @@ export default function AccessGovernancePage() {
         if (!hasLevel) return false;
       }
 
+      // 5. Text search
       const search = filters.search.trim().toLowerCase();
       if (!search) return true;
 
       const permissionSearch = DOMAINS.map((domain) => `${domain} ${user.permissions[domain]}`)
         .join(" ")
         .toLowerCase();
+
+      // Include all scopes in the search text
+      const scopeText = scopeList
+        .map((s) => `${s.org} ${s.brand} ${s.location}`)
+        .join(" ")
+        .toLowerCase();
+
       const userText = [
         user.firstName,
         user.lastName,
         user.email,
         user.role,
         user.status,
-        user.scope.org,
-        user.scope.brand,
-        user.scope.location,
+        scopeText,
         permissionSearch,
       ]
         .join(" ")
@@ -134,7 +178,7 @@ export default function AccessGovernancePage() {
 
       return userText.includes(search);
     });
-  }, [filters, scope, users]);
+  }, [filters, pageScope, users]);
 
   const filteredUserIds = useMemo(
     () => new Set(filteredUsers.map((user) => user.id)),
@@ -159,12 +203,16 @@ export default function AccessGovernancePage() {
     DOMAINS.some((domain) => user.permissions[domain] === "Edit")
   ).length;
 
+  // Count how many users have multi-scope access in the current view
+  const multiScopeCount = filteredUsers.filter(
+    (u) => (u.scopeList ?? [u.scope]).length > 1
+  ).length;
+
   const toggleSelectAll = () => {
     if (visibleSelectedIds.length === filteredUsers.length) {
       setSelectedIds(new Set());
       return;
     }
-
     setSelectedIds(new Set(filteredUsers.map((user) => user.id)));
   };
 
@@ -191,7 +239,6 @@ export default function AccessGovernancePage() {
   const handleBulkSuspend = () => {
     const reason = prompt("Enter a reason for suspension:");
     if (!reason) return;
-
     visibleSelectedIds.forEach((id) => suspendUser(id, reason));
     setSelectedIds(new Set());
   };
@@ -207,9 +254,15 @@ export default function AccessGovernancePage() {
     });
   };
 
+  const hasActiveGlobalFilter =
+    filters.filterOrg !== ALL_ORGANISATIONS ||
+    filters.filterBrand !== "All Brands" ||
+    filters.filterLocation !== "All Locations";
+
   return (
     <>
       <div className="space-y-6 pb-24">
+        {/* ── Hero ─────────────────────────────────────────────────────────── */}
         <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-5 shadow-sm">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
@@ -220,15 +273,15 @@ export default function AccessGovernancePage() {
                 Organize users by scope, access, and approval state
               </h1>
               <p className="mt-2 max-w-3xl text-sm font-medium text-slate-500">
-                The global organization filter now applies here too, so you can narrow to a brand
-                or location and immediately review who has access, what level they have, and what
-                still needs approval.
+                Use the global scope filter below to narrow by organisation, brand, or location.
+                Switch your viewer role between Super&nbsp;Admin and Owner to simulate what each
+                persona sees.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
-              <ScopePill label="Viewing" value={formatScopeLabel(scope)} tone="slate" />
               <ScopePill label="Visible Users" value={String(filteredUsers.length)} tone="indigo" />
+              <ScopePill label="Multi-Scope" value={String(multiScopeCount)} tone="violet" />
               <button
                 onClick={() => setIsInviteOpen(true)}
                 className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-slate-800"
@@ -239,6 +292,147 @@ export default function AccessGovernancePage() {
           </div>
         </section>
 
+        {/* ── Global Filter Bar ─────────────────────────────────────────────── */}
+        <section className="rounded-[28px] border border-indigo-100 bg-gradient-to-br from-slate-50 to-indigo-50/40 shadow-sm">
+          <div className="flex items-center justify-between border-b border-slate-100/80 px-6 py-4">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white">
+                <Building2 size={14} />
+              </div>
+              <span className="text-sm font-bold text-slate-800">Global Scope Filter</span>
+              {hasActiveGlobalFilter && (
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-bold text-indigo-700">
+                  Active
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Viewer Role Toggle */}
+              <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+                {(["Super Admin", "Owner"] as ViewerRole[]).map((vr) => (
+                  <button
+                    key={vr}
+                    onClick={() => setFilters({ viewerRole: vr })}
+                    className={`rounded-lg px-3 py-1.5 text-[12px] font-bold transition-all ${
+                      filters.viewerRole === vr
+                        ? vr === "Super Admin"
+                          ? "bg-slate-900 text-white shadow-sm"
+                          : "bg-violet-600 text-white shadow-sm"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    {vr}
+                  </button>
+                ))}
+              </div>
+              {hasActiveGlobalFilter && (
+                <button
+                  onClick={() =>
+                    setFilters({
+                      filterOrg: ALL_ORGANISATIONS,
+                      filterBrand: "All Brands",
+                      filterLocation: "All Locations",
+                    })
+                  }
+                  className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-[12px] font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+                >
+                  <X size={13} /> Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-4 px-6 py-4">
+            {/* Org */}
+            <ScopeFilterSelect
+              icon={<Building2 size={13} className="text-indigo-500" />}
+              label="Organisation"
+              value={filters.filterOrg}
+              options={filterBarOptions.organizations}
+              onChange={(val) =>
+                setFilters({
+                  filterOrg: val,
+                  filterBrand: "All Brands",
+                  filterLocation: "All Locations",
+                })
+              }
+            />
+
+            {/* Brand */}
+            <ScopeFilterSelect
+              icon={<Tag size={13} className="text-amber-500" />}
+              label="Brand"
+              value={filters.filterBrand}
+              options={filterBarOptions.brands}
+              onChange={(val) =>
+                setFilters({ filterBrand: val, filterLocation: "All Locations" })
+              }
+              disabled={filterBarOptions.brands.length <= 1}
+            />
+
+            {/* Location */}
+            <ScopeFilterSelect
+              icon={<MapPin size={13} className="text-emerald-500" />}
+              label="Location"
+              value={filters.filterLocation}
+              options={filterBarOptions.locations}
+              onChange={(val) => setFilters({ filterLocation: val })}
+              disabled={filterBarOptions.locations.length <= 1}
+            />
+
+            {/* Active filter chips */}
+            {hasActiveGlobalFilter && (
+              <div className="flex flex-wrap items-center gap-2 pb-0.5">
+                {filters.filterOrg !== ALL_ORGANISATIONS && (
+                  <FilterChip
+                    label={filters.filterOrg}
+                    onRemove={() =>
+                      setFilters({
+                        filterOrg: ALL_ORGANISATIONS,
+                        filterBrand: "All Brands",
+                        filterLocation: "All Locations",
+                      })
+                    }
+                  />
+                )}
+                {filters.filterBrand !== "All Brands" && (
+                  <FilterChip
+                    label={filters.filterBrand}
+                    onRemove={() =>
+                      setFilters({ filterBrand: "All Brands", filterLocation: "All Locations" })
+                    }
+                  />
+                )}
+                {filters.filterLocation !== "All Locations" && (
+                  <FilterChip
+                    label={filters.filterLocation}
+                    onRemove={() => setFilters({ filterLocation: "All Locations" })}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Viewer Role explanation */}
+          <div className="border-t border-slate-100/80 bg-white/60 px-6 py-3 rounded-b-[28px]">
+            <p className="text-[12px] font-medium text-slate-500">
+              {filters.viewerRole === "Super Admin" ? (
+                <>
+                  <span className="font-bold text-slate-900">Super Admin</span> — sees all users
+                  across every organisation matching the scope filter above.
+                </>
+              ) : (
+                <>
+                  <span className="font-bold text-violet-700">Owner</span> — restricted to users
+                  within <span className="font-bold text-slate-800">{OWNER_ORG}</span> only,
+                  regardless of the scope filter selection.
+                </>
+              )}
+            </p>
+          </div>
+        </section>
+
+        {/* ── Metric Cards ──────────────────────────────────────────────────── */}
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             label="Users In Scope"
@@ -265,6 +459,7 @@ export default function AccessGovernancePage() {
           />
         </section>
 
+        {/* ── User Directory + Approval Queue ───────────────────────────────── */}
         <section className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_420px]">
           <div className="rounded-[28px] border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-100 px-6 py-5">
@@ -272,8 +467,8 @@ export default function AccessGovernancePage() {
                 <div>
                   <h2 className="text-lg font-bold text-slate-900">Scoped User Directory</h2>
                   <p className="mt-1 text-sm font-medium text-slate-500">
-                    Filter by role, status, domain, and permission level while keeping the global
-                    org, brand, and location filter in effect.
+                    Narrow further by role, status, domain, and permission level. Users with
+                    multi-brand or multi-location access appear when any of their scopes match.
                   </p>
                 </div>
 
@@ -306,41 +501,43 @@ export default function AccessGovernancePage() {
                     onClick={resetFilters}
                     className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100"
                   >
-                    <FilterX size={15} /> Reset
+                    <FilterX size={15} /> Reset All
                   </button>
                 </div>
               </div>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] border-collapse text-left">
+              <table className="w-full min-w-[1020px] border-collapse text-left">
                 <thead>
                   <tr className="border-b border-slate-100 bg-slate-50">
                     <th className="w-12 py-4 pl-6 pr-3">
                       <button
                         onClick={toggleSelectAll}
                         className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${
-                          visibleSelectedIds.length === filteredUsers.length && filteredUsers.length > 0
+                          visibleSelectedIds.length === filteredUsers.length &&
+                          filteredUsers.length > 0
                             ? "border-indigo-600 bg-indigo-600"
                             : "border-slate-300 bg-white hover:border-indigo-400"
                         }`}
                       >
-                        {visibleSelectedIds.length === filteredUsers.length && filteredUsers.length > 0 && (
-                          <Check size={12} className="text-white" />
-                        )}
+                        {visibleSelectedIds.length === filteredUsers.length &&
+                          filteredUsers.length > 0 && (
+                            <Check size={12} className="text-white" />
+                          )}
                       </button>
                     </th>
                     <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
                       User
                     </th>
                     <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                      Scope
+                      Scope / Access
                     </th>
                     <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
                       Role
                     </th>
                     <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                      Access Summary
+                      Permissions
                     </th>
                     <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
                       Status
@@ -356,14 +553,19 @@ export default function AccessGovernancePage() {
                 <tbody className="divide-y divide-slate-100">
                   {filteredUsers.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-6 py-14 text-center text-sm font-medium text-slate-500">
-                        No users match the selected location and access filters.
+                      <td
+                        colSpan={8}
+                        className="px-6 py-14 text-center text-sm font-medium text-slate-500"
+                      >
+                        No users match the selected scope, role, and access filters.
                       </td>
                     </tr>
                   ) : (
                     filteredUsers.map((user) => {
                       const requestCount = pendingRequestsByUser[user.id]?.length ?? 0;
                       const accessSummary = summarizeAccess(user);
+                      const scopeList = user.scopeList ?? [user.scope];
+                      const isMultiScope = scopeList.length > 1;
 
                       return (
                         <tr
@@ -384,10 +586,15 @@ export default function AccessGovernancePage() {
                                   : "border-slate-300 bg-white hover:border-indigo-400"
                               }`}
                             >
-                              {selectedIds.has(user.id) && <Check size={12} className="text-white" />}
+                              {selectedIds.has(user.id) && (
+                                <Check size={12} className="text-white" />
+                              )}
                             </button>
                           </td>
-                          <td className="cursor-pointer px-3 py-4" onClick={() => setActiveUserId(user.id)}>
+                          <td
+                            className="cursor-pointer px-3 py-4"
+                            onClick={() => setActiveUserId(user.id)}
+                          >
                             <div className="flex items-center gap-3">
                               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-100 to-violet-100 text-xs font-bold text-indigo-700 ring-2 ring-white shadow-sm">
                                 {user.firstName[0]}
@@ -397,17 +604,29 @@ export default function AccessGovernancePage() {
                                 <div className="font-semibold text-slate-900 transition-colors group-hover:text-indigo-600">
                                   {user.firstName} {user.lastName}
                                 </div>
-                                <div className="text-xs font-medium text-slate-500">{user.email}</div>
+                                <div className="text-xs font-medium text-slate-500">
+                                  {user.email}
+                                </div>
                               </div>
                             </div>
                           </td>
                           <td className="px-3 py-4">
                             <div className="text-xs font-semibold text-slate-700">
-                              {user.scope.location === "All Locations"
-                                ? user.scope.brand
-                                : user.scope.location}
+                              {formatScopeListLabel(scopeList)}
                             </div>
-                            <div className="mt-1 text-[11px] text-slate-400">{formatScopeLabel(user.scope)}</div>
+                            {isMultiScope && (
+                              <div className="mt-1 flex items-center gap-1">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-600">
+                                  <Building2 size={9} />
+                                  {scopeList.length} scopes
+                                </span>
+                              </div>
+                            )}
+                            {!isMultiScope && (
+                              <div className="mt-1 text-[11px] text-slate-400">
+                                {formatScopeLabel(user.scope)}
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 py-4">
                             <span className="inline-flex rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 shadow-sm">
@@ -416,9 +635,21 @@ export default function AccessGovernancePage() {
                           </td>
                           <td className="px-3 py-4">
                             <div className="flex flex-wrap gap-1.5">
-                              <AccessCountChip label="Admin" value={accessSummary.admin} tone="slate" />
-                              <AccessCountChip label="Edit" value={accessSummary.edit} tone="amber" />
-                              <AccessCountChip label="View" value={accessSummary.view} tone="emerald" />
+                              <AccessCountChip
+                                label="Admin"
+                                value={accessSummary.admin}
+                                tone="slate"
+                              />
+                              <AccessCountChip
+                                label="Edit"
+                                value={accessSummary.edit}
+                                tone="amber"
+                              />
+                              <AccessCountChip
+                                label="View"
+                                value={accessSummary.view}
+                                tone="emerald"
+                              />
                             </div>
                           </td>
                           <td className="px-3 py-4">
@@ -436,7 +667,9 @@ export default function AccessGovernancePage() {
                                 <ShieldAlert size={12} /> Approve {requestCount}
                               </button>
                             ) : (
-                              <span className="text-xs font-medium text-slate-400">No pending requests</span>
+                              <span className="text-xs font-medium text-slate-400">
+                                No pending
+                              </span>
                             )}
                           </td>
                           <td className="px-6 py-4">
@@ -445,7 +678,7 @@ export default function AccessGovernancePage() {
                                 onClick={() => setActiveUserId(user.id)}
                                 className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50"
                               >
-                                Manage Access
+                                Manage
                               </button>
                             </div>
                           </td>
@@ -458,6 +691,7 @@ export default function AccessGovernancePage() {
             </div>
           </div>
 
+          {/* ── Approval Queue + Info ─────────────────────────────────────────  */}
           <aside className="space-y-6">
             <div className="rounded-[28px] border border-amber-200/70 bg-gradient-to-br from-amber-50 to-orange-50 p-6 shadow-sm">
               <div className="flex items-start justify-between gap-4">
@@ -474,7 +708,9 @@ export default function AccessGovernancePage() {
                   </p>
                 </div>
                 <div className="rounded-2xl bg-white/70 px-3 py-2 text-right shadow-sm">
-                  <div className="text-xl font-black text-amber-900">{visiblePendingRequests.length}</div>
+                  <div className="text-xl font-black text-amber-900">
+                    {visiblePendingRequests.length}
+                  </div>
                   <div className="text-[10px] font-bold uppercase tracking-widest text-amber-600">
                     Pending
                   </div>
@@ -502,7 +738,10 @@ export default function AccessGovernancePage() {
                               {user.firstName} {user.lastName}
                             </div>
                             <div className="mt-1 text-xs font-medium text-slate-500">
-                              {request.domain} to {request.requestedLevel} · {user.scope.location}
+                              {request.domain} → {request.requestedLevel} ·{" "}
+                              {user.scope.location === "All Locations"
+                                ? user.scope.brand
+                                : user.scope.location}
                             </div>
                           </div>
                           <button
@@ -543,13 +782,13 @@ export default function AccessGovernancePage() {
               <div className="mt-4 space-y-4 text-sm font-medium text-slate-600">
                 <InfoRow
                   icon={<Shield size={15} className="text-slate-700" />}
-                  title="Location-aware visibility"
-                  copy="Anyone whose assigned scope overlaps the selected org, brand, or location appears here, including broader admin accounts."
+                  title="Multi-scope visibility"
+                  copy="Users with access to multiple brands or locations appear whenever any of their scopes matches your selected filter — shown with a scope count badge."
                 />
                 <InfoRow
                   icon={<KeyRound size={15} className="text-amber-600" />}
-                  title="Permission-level filtering"
-                  copy="Filter down to a single domain and a single permission level to isolate who can edit, view, or administer that area."
+                  title="Viewer role simulation"
+                  copy="Toggle between Super Admin (full cross-org visibility) and Owner (restricted to your org only) to preview what each persona sees."
                 />
                 <InfoRow
                   icon={<Mail size={15} className="text-indigo-600" />}
@@ -561,6 +800,7 @@ export default function AccessGovernancePage() {
           </aside>
         </section>
 
+        {/* ── Access Matrix ─────────────────────────────────────────────────── */}
         <section className="rounded-[28px] border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 px-6 py-5">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -571,7 +811,10 @@ export default function AccessGovernancePage() {
                 </p>
               </div>
               <div className="text-sm font-semibold text-slate-500">
-                {filteredUsers.length} users in {formatScopeLabel(scope)}
+                {filteredUsers.length} users ·{" "}
+                {filters.viewerRole === "Owner"
+                  ? `Owner view (${OWNER_ORG})`
+                  : "Super Admin view"}
               </div>
             </div>
           </div>
@@ -615,7 +858,7 @@ export default function AccessGovernancePage() {
                             {user.firstName} {user.lastName}
                           </div>
                           <div className="mt-1 text-xs font-medium text-slate-500">
-                            {user.role} · {user.scope.location}
+                            {user.role} · {formatScopeListLabel(user.scopeList ?? [user.scope])}
                           </div>
                         </button>
                       </td>
@@ -633,6 +876,7 @@ export default function AccessGovernancePage() {
         </section>
       </div>
 
+      {/* ── Bulk Action Bar ───────────────────────────────────────────────── */}
       {visibleSelectedIds.length > 0 && (
         <div className="fade-in-up fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-full bg-slate-900 px-5 py-3 shadow-[0_20px_40px_rgba(15,23,42,0.3)]">
           <div className="border-r border-slate-700 pr-4 text-sm font-bold text-white">
@@ -693,6 +937,79 @@ export default function AccessGovernancePage() {
   );
 }
 
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function ScopeFilterSelect({
+  icon,
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (val: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+        {icon}
+        {label}
+      </span>
+      <div
+        className={`relative flex items-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-colors ${
+          disabled
+            ? "border-slate-100 bg-slate-50 text-slate-300"
+            : "border-slate-200 bg-white text-slate-800 shadow-sm hover:border-indigo-300 hover:bg-indigo-50/30"
+        }`}
+      >
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          className="cursor-pointer appearance-none bg-transparent pr-6 outline-none disabled:cursor-default"
+          aria-label={`Filter by ${label}`}
+        >
+          {options.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          size={13}
+          className={`pointer-events-none absolute right-3 ${disabled ? "text-slate-200" : "text-slate-400"}`}
+        />
+      </div>
+    </label>
+  );
+}
+
+function FilterChip({
+  label,
+  onRemove,
+}: {
+  label: string;
+  onRemove: () => void;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[12px] font-bold text-indigo-700">
+      {label}
+      <button
+        onClick={onRemove}
+        className="rounded-full p-0.5 transition-colors hover:bg-indigo-100"
+        aria-label={`Remove ${label} filter`}
+      >
+        <X size={10} />
+      </button>
+    </span>
+  );
+}
+
 function MetricCard({
   label,
   value,
@@ -733,7 +1050,9 @@ function FilterSelect({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</span>
+      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+        {label}
+      </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -756,11 +1075,12 @@ function ScopePill({
 }: {
   label: string;
   value: string;
-  tone: "slate" | "indigo";
+  tone: "slate" | "indigo" | "violet";
 }) {
   const tones = {
     slate: "border-slate-200 bg-slate-50 text-slate-700",
     indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
+    violet: "border-violet-200 bg-violet-50 text-violet-700",
   } as const;
 
   return (
@@ -801,7 +1121,9 @@ function StatusBadge({ status }: { status: UserStatus }) {
   } as const;
 
   return (
-    <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tones[status]}`}>
+    <span
+      className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tones[status]}`}
+    >
       {status}
     </span>
   );

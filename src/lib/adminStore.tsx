@@ -36,7 +36,10 @@ export type AppUser = {
   lastName: string;
   email: string;
   role: UserRole;
+  /** Primary scope (backward compat) */
   scope: UserScope;
+  /** All scopes this user has access to — includes scope as first entry */
+  scopeList: UserScope[];
   permissions: Record<DomainType, PermissionLevel>;
   status: UserStatus;
   lastActive: string;
@@ -93,37 +96,98 @@ const FIRST_NAMES = ["James", "Mary", "John", "Patricia", "Robert", "Jennifer", 
 const LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Prakash", "Chen", "Kim", "Nguyen", "Ali"];
 const ROLES: UserRole[] = ["Super Admin", "Organisation Director", "General Manager", "Kitchen Manager", "Floor Manager", "Shift Supervisor"];
 
-// Generate 450 robust dummy users tracking to the huge organization map
+/** Build a flat list of every {org, brand, location} tuple from the hierarchy */
+const ALL_SCOPE_TUPLES: UserScope[] = hierarchy.organizations.flatMap((org) =>
+  org.chains.flatMap((chain) =>
+    chain.brands.flatMap((brand) =>
+      brand.regions.flatMap((region) =>
+        region.locations.map((loc) => ({
+          org: org.name,
+          brand: brand.name,
+          location: loc.name,
+        }))
+      )
+    )
+  )
+);
+
+/** Build a flat list of every {org, brand} combo for brand-level scopes */
+const ALL_BRAND_TUPLES: UserScope[] = hierarchy.organizations.flatMap((org) =>
+  org.chains.flatMap((chain) =>
+    chain.brands.map((brand) => ({
+      org: org.name,
+      brand: brand.name,
+      location: "All Locations",
+    }))
+  )
+);
+
+function pickRandom<T>(arr: T[], rng: () => number): T {
+  return arr[Math.floor(rng() * arr.length)];
+}
+
+// Seeded prng for stable data across re-renders
+function makeRng(seed: number) {
+  let s = seed;
+  return () => {
+    const x = Math.sin(s++) * 10000;
+    return x - Math.floor(x);
+  };
+}
+
+// Generate 450 robust dummy users with multi-scope support
 const INITIAL_USERS: AppUser[] = Array.from({ length: 450 }).map((_, i) => {
-  const f = FIRST_NAMES[Math.floor(Math.random() * FIRST_NAMES.length)];
-  const l = LAST_NAMES[Math.floor(Math.random() * LAST_NAMES.length)];
+  const rng = makeRng(i * 137 + 7);
+
+  const f = FIRST_NAMES[Math.floor(rng() * FIRST_NAMES.length)];
+  const l = LAST_NAMES[Math.floor(rng() * LAST_NAMES.length)];
   const email = `${f.toLowerCase()}.${l.toLowerCase()}${i}@corporate.com`;
 
-  const org = hierarchy.organizations[Math.floor(Math.random() * hierarchy.organizations.length)];
-  const brandObj = org.chains[0].brands[Math.floor(Math.random() * org.chains[0].brands.length)];
-  const locArr = brandObj.regions[0].locations;
+  // Determine primary scope
+  const isBrandLevel = rng() > 0.6; // 40% brand-level
+  const isOrgLevel = !isBrandLevel && rng() > 0.85; // ~6% org-level
 
-  const isLocScope = Math.random() > 0.4; // 60% are location managers
-  const isBrandScope = Math.random() > 0.7; // 30% are brand managers
+  let primaryScope: UserScope;
+  if (isOrgLevel) {
+    const org = hierarchy.organizations[Math.floor(rng() * hierarchy.organizations.length)];
+    primaryScope = { org: org.name, brand: "All Brands", location: "All Locations" };
+  } else if (isBrandLevel) {
+    primaryScope = pickRandom(ALL_BRAND_TUPLES, rng);
+  } else {
+    const tuple = pickRandom(ALL_SCOPE_TUPLES, rng);
+    primaryScope = tuple;
+  }
 
-  const location = isLocScope && locArr.length > 0 ? locArr[Math.floor(Math.random() * locArr.length)].name : "All Locations";
-  const brand = isLocScope || isBrandScope ? brandObj.name : "All Brands";
-  const orgName = Math.random() > 0.95 ? "All Organisations" : org.name;
+  // Build scopeList: ~30% get 2 extra scopes, ~10% get 1 extra scope
+  const scopeList: UserScope[] = [primaryScope];
+  const extraScopeChance = rng();
+  if (extraScopeChance < 0.30) {
+    // 2 extra scopes (3 total) — usually in same org, different brand or location
+    const extra1 = pickRandom(ALL_BRAND_TUPLES.filter(t => t.org === primaryScope.org || primaryScope.brand === "All Brands"), rng);
+    const extra2 = pickRandom(ALL_SCOPE_TUPLES.filter(t => t.org === primaryScope.org || primaryScope.brand === "All Brands"), rng);
+    if (extra1 && extra1.brand !== primaryScope.brand) scopeList.push(extra1);
+    if (extra2 && extra2.location !== primaryScope.location) scopeList.push({ ...extra2 });
+  } else if (extraScopeChance < 0.55) {
+    // 1 extra scope
+    const extra = pickRandom(ALL_BRAND_TUPLES.filter(t => t.org === primaryScope.org || primaryScope.brand === "All Brands"), rng);
+    if (extra && extra.brand !== primaryScope.brand) scopeList.push(extra);
+  }
 
-  const r = ROLES[Math.floor(Math.random() * ROLES.length)];
-  const stat: UserStatus = Math.random() > 0.95 ? "Suspended" : Math.random() > 0.85 ? "Pending" : "Active";
-  
+  const r = ROLES[Math.floor(rng() * ROLES.length)];
+  const stat: UserStatus = rng() > 0.95 ? "Suspended" : rng() > 0.85 ? "Pending" : "Active";
+
   return {
     id: `usr_gen_${i}`,
     firstName: f,
     lastName: l,
     email,
     role: r,
-    scope: { org: orgName, brand: brand, location },
+    scope: primaryScope,
+    scopeList,
     permissions: { ...DEFAULT_PERMISSIONS[r] },
     status: stat,
-    lastActive: stat === "Active" ? `${Math.floor(Math.random() * 60)} mins ago` : "-",
-    sessions: stat === "Active" ? Math.floor(Math.random() * 3) + 1 : 0
+    lastActive: stat === "Active" ? `${Math.floor(rng() * 60)} mins ago` : "-",
+    sessions: stat === "Active" ? Math.floor(rng() * 3) + 1 : 0,
   };
 });
 
@@ -171,7 +235,8 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
       ...data,
       id: `usr_${Date.now()}`,
       lastActive: "-",
-      sessions: 0
+      sessions: 0,
+      scopeList: data.scopeList ?? [data.scope],
     };
     setUsers(prev => [newUser, ...prev]);
     logAction("Current Admin", `${data.firstName} ${data.lastName}`, "User Created", `Created user with role ${data.role}`);
