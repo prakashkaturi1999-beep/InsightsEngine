@@ -2,6 +2,12 @@
 
 import { useState } from "react";
 import { useAdminStore, UserRole } from "@/lib/adminStore";
+import {
+  ALL_BRANDS,
+  ALL_LOCATIONS,
+  ALL_ORGANISATIONS,
+  getAdminScopeOptions,
+} from "@/lib/adminScopeUtils";
 import { X, UserPlus, Send, Mail, Briefcase, MapPin } from "lucide-react";
 
 type Props = {
@@ -17,9 +23,10 @@ export function InviteUserModal({ open, onClose }: Props) {
   const [lastName, setLast] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<UserRole>("General Manager");
-  const [org, setOrg] = useState("All Organisations");
-  const [brand, setBrand] = useState("All Brands");
-  const [location, setLocation] = useState("All Locations");
+  const [org, setOrg] = useState(ALL_ORGANISATIONS);
+  const [brand, setBrand] = useState(ALL_BRANDS);
+  const [location, setLocation] = useState(ALL_LOCATIONS);
+  const scopeOptions = getAdminScopeOptions({ org, brand });
 
   if (!open) return null;
 
@@ -35,7 +42,13 @@ export function InviteUserModal({ open, onClose }: Props) {
     });
     
     // reset form mapping
-    setFirst(""); setLast(""); setEmail(""); setRole("General Manager"); setOrg("All Organisations");
+    setFirst("");
+    setLast("");
+    setEmail("");
+    setRole("General Manager");
+    setOrg(ALL_ORGANISATIONS);
+    setBrand(ALL_BRANDS);
+    setLocation(ALL_LOCATIONS);
     onClose();
   };
 
@@ -91,9 +104,31 @@ export function InviteUserModal({ open, onClose }: Props) {
               <MapPin size={14} /> Data Scope Restriction
             </h3>
             <div className="grid grid-cols-3 gap-3">
-              <Select label="Organisation" value={org} onChange={setOrg} options={["All Organisations", "Craven Group"]} />
-              <Select label="Brand" value={brand} onChange={setBrand} options={["All Brands", "Urban Bite"]} />
-              <Select label="Location" value={location} onChange={setLocation} options={["All Locations", "Downtown Central"]} />
+              <Select
+                label="Organisation"
+                value={org}
+                onChange={(value) => {
+                  setOrg(value);
+                  setBrand(ALL_BRANDS);
+                  setLocation(ALL_LOCATIONS);
+                }}
+                options={scopeOptions.organizations}
+              />
+              <Select
+                label="Brand"
+                value={brand}
+                onChange={(value) => {
+                  setBrand(value);
+                  setLocation(ALL_LOCATIONS);
+                }}
+                options={scopeOptions.brands}
+              />
+              <Select
+                label="Location"
+                value={location}
+                onChange={setLocation}
+                options={scopeOptions.locations}
+              />
             </div>
           </section>
 

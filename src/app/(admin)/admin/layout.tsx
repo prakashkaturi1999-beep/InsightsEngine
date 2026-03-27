@@ -6,8 +6,9 @@ import { usePathname } from "next/navigation";
 import { BurgerNav } from "@/components/executive/BurgerNav";
 import { ExecutiveScopeProvider, useExecutiveScope } from "@/components/executive/ExecutiveScopeProvider";
 import { AdminStoreProvider } from "@/lib/adminStore";
-import { currentScope, options } from "@/lib/executiveMock";
-import { UserCog, Zap, Building2, Bell, LogOut, ArrowLeft, Search } from "lucide-react";
+import { AdminFilterProvider, useAdminFilters } from "@/lib/adminFilterContext";
+import { currentScope } from "@/lib/executiveMock";
+import { UserCog, Zap, Building2, Bell, ArrowLeft, Search } from "lucide-react";
 
 const adminNavItems = [
   { href: "/admin", label: "Access Governance", exact: true },
@@ -19,7 +20,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
     <ExecutiveScopeProvider initialScope={currentScope}>
       <AdminStoreProvider>
-        <AdminShell>{children}</AdminShell>
+        <AdminFilterProvider>
+          <AdminShell>{children}</AdminShell>
+        </AdminFilterProvider>
       </AdminStoreProvider>
     </ExecutiveScopeProvider>
   );
@@ -27,7 +30,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
 function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { scope, setScope } = useExecutiveScope();
+  const { scope, setScope, options } = useExecutiveScope();
+  const { filters, setFilters } = useAdminFilters();
 
   return (
     <div className="min-h-screen bg-[#f8f9fb]">
@@ -51,18 +55,69 @@ function AdminShell({ children }: { children: ReactNode }) {
             </Link>
           </div>
 
-          {/* Center Search Bar for Users (Admin specific feature) */}
-          <div className="flex-1 max-w-lg hidden md:block">
-            <div className="relative flex items-center w-full h-10 rounded-xl bg-slate-100 border border-slate-200/60 px-3 text-sm focus-within:ring-2 focus-within:ring-slate-900/10 focus-within:border-slate-300 transition-all shadow-inner">
-              <Search size={16} className="text-slate-400 mr-2 flex-shrink-0" />
-              <input 
-                type="text" 
-                placeholder="Search users by name, email, or role (⌘K)" 
-                className="w-full bg-transparent outline-none text-slate-900 font-medium placeholder:text-slate-400 placeholder:font-normal"
+          <div className="flex flex-1 items-center justify-center gap-2 xl:gap-3 flex-wrap">
+            <div className="hidden md:flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <Building2 size={13} className="text-slate-400 flex-shrink-0" />
+              <select
+                value={scope.org}
+                onChange={(e) =>
+                  setScope({ org: e.target.value, brand: "All Brands", location: "All Locations" })
+                }
+                className="bg-transparent text-sm font-semibold text-slate-900 outline-none cursor-pointer"
+                aria-label="Organisation filter"
+              >
+                {options.organizations.map((org) => (
+                  <option key={org} value={org}>
+                    {org}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="hidden lg:flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <select
+                value={scope.brand}
+                onChange={(e) =>
+                  setScope({ ...scope, brand: e.target.value as typeof scope.brand, location: "All Locations" })
+                }
+                className="bg-transparent text-sm font-medium text-slate-700 outline-none cursor-pointer"
+                aria-label="Brand filter"
+              >
+                {options.brands.map((brand) => (
+                  <option key={brand} value={brand}>
+                    {brand}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="hidden xl:flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <select
+                value={scope.location}
+                onChange={(e) =>
+                  setScope({ ...scope, location: e.target.value as typeof scope.location })
+                }
+                className="bg-transparent text-sm font-medium text-slate-700 outline-none cursor-pointer"
+                aria-label="Location filter"
+              >
+                {options.locations.map((location) => (
+                  <option key={location} value={location}>
+                    {location}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="relative flex h-10 min-w-[260px] flex-1 max-w-xl items-center rounded-xl border border-slate-200/60 bg-slate-100 px-3 text-sm shadow-inner transition-all focus-within:border-slate-300 focus-within:ring-2 focus-within:ring-slate-900/10">
+              <Search size={16} className="mr-2 flex-shrink-0 text-slate-400" />
+              <input
+                type="text"
+                value={filters.search}
+                onChange={(e) => setFilters({ search: e.target.value })}
+                placeholder="Search users, email, role, domain, or location"
+                className="w-full bg-transparent font-medium text-slate-900 outline-none placeholder:font-normal placeholder:text-slate-400"
+                aria-label="Search users"
               />
-              <div className="hidden lg:flex items-center justify-center rounded bg-white border border-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-400 shadow-sm ml-2">
-                ⌘K
-              </div>
             </div>
           </div>
 
