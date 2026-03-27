@@ -93,6 +93,7 @@ export default function AccessGovernancePage() {
   const [activeUserId, setActiveUserId] = useState<string | null>(null);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [bulkRole, setBulkRole] = useState<UserRole>("General Manager");
+  const [sortBy, setSortBy] = useState<"Name" | "Organisation" | "Role" | "Status">("Organisation");
 
   // Cascade-aware dropdown options for the global filter bar
   const filterBarOptions = useMemo(
@@ -123,7 +124,7 @@ export default function AccessGovernancePage() {
   );
 
   const filteredUsers = useMemo(() => {
-    return users.filter((user) => {
+    const filtered = users.filter((user) => {
       const scopeList = user.scopeList ?? [user.scope];
 
       // 1. Multi-scope intersection against the page filter bar scope
@@ -178,7 +179,25 @@ export default function AccessGovernancePage() {
 
       return userText.includes(search);
     });
-  }, [filters, pageScope, users]);
+
+    return filtered.sort((a, b) => {
+      if (sortBy === "Name") {
+        return a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
+      } else if (sortBy === "Organisation") {
+        const orgA = a.scopeList?.[0]?.org ?? a.scope.org;
+        const orgB = b.scopeList?.[0]?.org ?? b.scope.org;
+        if (orgA !== orgB) return orgA.localeCompare(orgB);
+        return a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
+      } else if (sortBy === "Role") {
+        if (a.role !== b.role) return a.role.localeCompare(b.role);
+        return a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
+      } else if (sortBy === "Status") {
+        if (a.status !== b.status) return a.status.localeCompare(b.status);
+        return a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
+      }
+      return 0;
+    });
+  }, [filters, pageScope, users, sortBy]);
 
   const filteredUserIds = useMemo(
     () => new Set(filteredUsers.map((user) => user.id)),
@@ -496,6 +515,12 @@ export default function AccessGovernancePage() {
                     value={filters.level}
                     onChange={(value) => setFilters({ level: value as typeof filters.level })}
                     options={LEVEL_OPTIONS}
+                  />
+                  <FilterSelect
+                    label="Sort By"
+                    value={sortBy}
+                    onChange={(value) => setSortBy(value as "Name" | "Organisation" | "Role" | "Status")}
+                    options={["Organisation", "Name", "Role", "Status"]}
                   />
                   <button
                     onClick={resetFilters}
