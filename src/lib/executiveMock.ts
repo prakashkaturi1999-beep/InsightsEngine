@@ -110,17 +110,16 @@ function generateHierarchy(): RestaurantHierarchy {
         const numCities = 3 + (rIdx % 4); // 3-6 locations per region
         const locations = CITIES.slice((brandIndex + rIdx) % CITIES.length, ((brandIndex + rIdx) % CITIES.length) + numCities).map((city, cIdx) => {
           const venue = VENUES[(brandIndex + cIdx * 7) % VENUES.length];
-          const locName = `${brandName} ${city} - ${venue}`;
+          const locName = `${city} - ${venue}`;
           return {
             id: `loc_${locCounter++}`,
             name: locName
           };
         });
-        // handle wrap around empty lists
         if (locations.length === 0) {
-          locations.push({ id: `loc_${locCounter++}`, name: `${brandName} Metro 1` });
-          locations.push({ id: `loc_${locCounter++}`, name: `${brandName} Metro 2` });
-          locations.push({ id: `loc_${locCounter++}`, name: `${brandName} Metro 3` });
+          locations.push({ id: `loc_${locCounter++}`, name: `Metro 1` });
+          locations.push({ id: `loc_${locCounter++}`, name: `Metro 2` });
+          locations.push({ id: `loc_${locCounter++}`, name: `Metro 3` });
         }
         return {
           id: `reg_${region.toLowerCase().replace(/\s/g, '_')}_${rIdx}`,
