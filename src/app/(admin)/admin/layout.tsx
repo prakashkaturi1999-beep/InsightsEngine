@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode } from "react";
+import { ReactNode, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BurgerNav } from "@/components/executive/BurgerNav";
@@ -8,6 +8,7 @@ import { ExecutiveScopeProvider, useExecutiveScope } from "@/components/executiv
 import { AdminStoreProvider } from "@/lib/adminStore";
 import { AdminFilterProvider, useAdminFilters } from "@/lib/adminFilterContext";
 import { currentScope } from "@/lib/executiveMock";
+import { ALL_ORGANISATIONS } from "@/lib/adminScopeUtils";
 import { UserCog, Zap, Building2, Bell, ArrowLeft, Search } from "lucide-react";
 
 const adminNavItems = [
@@ -32,6 +33,14 @@ function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { scope, setScope, options } = useExecutiveScope();
   const { filters, setFilters } = useAdminFilters();
+
+  // Sync global navbar scope → admin filter context so there is only ONE filter bar
+  useEffect(() => {
+    const org = scope.org === "All Organisations" ? ALL_ORGANISATIONS : scope.org;
+    const brand = scope.brand ?? "All Brands";
+    const location = scope.location ?? "All Locations";
+    setFilters({ filterOrg: org, filterBrand: brand, filterLocation: location });
+  }, [scope.org, scope.brand, scope.location]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="min-h-screen bg-[#f8f9fb]">

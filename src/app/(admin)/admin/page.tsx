@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { UserDetailDrawer } from "@/components/admin/UserDetailDrawer";
 import { InviteUserModal } from "@/components/admin/InviteUserModal";
 import { useAdminFilters, type ViewerRole } from "@/lib/adminFilterContext";
@@ -14,31 +14,27 @@ import {
   type UserStatus,
 } from "@/lib/adminStore";
 import {
-  formatScopeLabel,
   formatScopeListLabel,
-  getFilterBarOptions,
   multiScopeIntersectsSelection,
   userBelongsToOrg,
-  ALL_ORGANISATIONS,
 } from "@/lib/adminScopeUtils";
 import {
+  ArrowUpDown,
   Ban,
-  Building2,
   Check,
   ChevronDown,
-  FilterX,
-  KeyRound,
-  Mail,
-  MapPin,
-  Shield,
+  ChevronUp,
+  Filter,
+  Search,
   ShieldAlert,
-  Tag,
+  ShieldCheck,
+  SlidersHorizontal,
   UserCheck,
   UserPlus,
   X,
 } from "lucide-react";
 
-const OWNER_ORG = "Craven Group"; // default owner org for "Owner" role simulation
+const OWNER_ORG = "Craven Group";
 
 const DOMAINS: DomainType[] = [
   "Finance",
@@ -77,6 +73,11 @@ const LEVEL_OPTIONS: Array<PermissionLevel | "All Levels"> = [
   "Admin",
 ];
 
+type SortKey = "name" | "org" | "role" | "status";
+type SortDir = "asc" | "desc";
+
+const PAGE_SIZE = 50;
+
 export default function AccessGovernancePage() {
   const {
     users,
@@ -92,166 +93,105 @@ export default function AccessGovernancePage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeUserId, setActiveUserId] = useState<string | null>(null);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [bulkRole, setBulkRole] = useState<UserRole>("General Manager");
-  const [sortBy, setSortBy] = useState<"Name" | "Organisation" | "Role" | "Status">("Organisation");
+  const [sortKey, setSortKey] = useState<SortKey>("org");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [currentPage, setCurrentPage] = useState(1);
+  const filterDrawerRef = useRef<HTMLDivElement>(null);
 
-  // Cascade-aware dropdown options for the global filter bar
-  const filterBarOptions = useMemo(
-    () => getFilterBarOptions(filters.filterOrg, filters.filterBrand),
-    [filters.filterOrg, filters.filterBrand]
-  );
+  // Close filter drawer on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (filterDrawerRef.current && !filterDrawerRef.current.contains(e.target as Node)) {
+        setIsFilterOpen(false);
+      }
+    }
+    if (isFilterOpen) document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [isFilterOpen]);
 
   const pendingRequests = useMemo(
-    () => accessRequests.filter((request) => request.status === "Pending"),
+    () => accessRequests.filter((r) => r.status === "Pending"),
     [accessRequests]
   );
 
   const pendingRequestsByUser = useMemo(() => {
-    return pendingRequests.reduce<Record<string, AccessRequest[]>>((acc, request) => {
-      acc[request.userId] = [...(acc[request.userId] ?? []), request];
+    return pendingRequests.reduce<Record<string, AccessRequest[]>>((acc, r) => {
+      acc[r.userId] = [...(acc[r.userId] ?? []), r];
       return acc;
     }, {});
   }, [pendingRequests]);
 
-  // The "selected scope" from the page-level filter bar
   const pageScope = useMemo(
-    () => ({
-      org: filters.filterOrg,
-      brand: filters.filterBrand,
-      location: filters.filterLocation,
-    }),
+    () => ({ org: filters.filterOrg, brand: filters.filterBrand, location: filters.filterLocation }),
     [filters.filterOrg, filters.filterBrand, filters.filterLocation]
   );
 
   const filteredUsers = useMemo(() => {
-    const filtered = users.filter((user) => {
+    const list = users.filter((user) => {
       const scopeList = user.scopeList ?? [user.scope];
-
-      // 1. Multi-scope intersection against the page filter bar scope
       if (!multiScopeIntersectsSelection(scopeList, pageScope)) return false;
-
-      // 2. Viewer role restriction: Owner can only see their own org's users
-      if (filters.viewerRole === "Owner") {
-        if (!userBelongsToOrg(scopeList, OWNER_ORG)) return false;
-      }
-
-      // 3. Status / role filters
+      if (filters.viewerRole === "Owner" && !userBelongsToOrg(scopeList, OWNER_ORG)) return false;
       if (filters.status !== "All Statuses" && user.status !== filters.status) return false;
       if (filters.role !== "All Roles" && user.role !== filters.role) return false;
-
-      // 4. Domain / level filters
       if (filters.domain !== "All Domains") {
         if (filters.level === "All Levels") {
           if (user.permissions[filters.domain] === "None") return false;
-        } else if (user.permissions[filters.domain] !== filters.level) {
-          return false;
-        }
+        } else if (user.permissions[filters.domain] !== filters.level) return false;
       } else if (filters.level !== "All Levels") {
-        const hasLevel = DOMAINS.some((domain) => user.permissions[domain] === filters.level);
-        if (!hasLevel) return false;
+        if (!DOMAINS.some((d) => user.permissions[d] === filters.level)) return false;
       }
-
-      // 5. Text search
       const search = filters.search.trim().toLowerCase();
       if (!search) return true;
-
-      const permissionSearch = DOMAINS.map((domain) => `${domain} ${user.permissions[domain]}`)
-        .join(" ")
-        .toLowerCase();
-
-      // Include all scopes in the search text
-      const scopeText = scopeList
-        .map((s) => `${s.org} ${s.brand} ${s.location}`)
-        .join(" ")
-        .toLowerCase();
-
-      const userText = [
-        user.firstName,
-        user.lastName,
-        user.email,
-        user.role,
-        user.status,
-        scopeText,
-        permissionSearch,
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      return userText.includes(search);
+      const scopeText = scopeList.map((s) => `${s.org} ${s.brand} ${s.location}`).join(" ").toLowerCase();
+      return `${user.firstName} ${user.lastName} ${user.email} ${user.role} ${user.status} ${scopeText}`
+        .toLowerCase()
+        .includes(search);
     });
 
-    return filtered.sort((a, b) => {
-      if (sortBy === "Name") {
-        return a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
-      } else if (sortBy === "Organisation") {
-        const orgA = a.scopeList?.[0]?.org ?? a.scope.org;
-        const orgB = b.scopeList?.[0]?.org ?? b.scope.org;
-        if (orgA !== orgB) return orgA.localeCompare(orgB);
-        return a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
-      } else if (sortBy === "Role") {
-        if (a.role !== b.role) return a.role.localeCompare(b.role);
-        return a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
-      } else if (sortBy === "Status") {
-        if (a.status !== b.status) return a.status.localeCompare(b.status);
-        return a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
-      }
-      return 0;
+    return list.sort((a, b) => {
+      let v = 0;
+      if (sortKey === "name") v = a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName);
+      else if (sortKey === "org") {
+        const oa = a.scopeList?.[0]?.org ?? a.scope.org;
+        const ob = b.scopeList?.[0]?.org ?? b.scope.org;
+        v = oa.localeCompare(ob) || a.firstName.localeCompare(b.firstName);
+      } else if (sortKey === "role") v = a.role.localeCompare(b.role) || a.firstName.localeCompare(b.firstName);
+      else if (sortKey === "status") v = a.status.localeCompare(b.status) || a.firstName.localeCompare(b.firstName);
+      return sortDir === "asc" ? v : -v;
     });
-  }, [filters, pageScope, users, sortBy]);
+  }, [filters, pageScope, users, sortKey, sortDir]);
 
-  const filteredUserIds = useMemo(
-    () => new Set(filteredUsers.map((user) => user.id)),
-    [filteredUsers]
-  );
+  useEffect(() => setCurrentPage(1), [filters, sortKey, sortDir]);
 
-  const visibleSelectedIds = useMemo(
-    () => [...selectedIds].filter((id) => filteredUserIds.has(id)),
-    [filteredUserIds, selectedIds]
-  );
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedUsers = filteredUsers.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  const visiblePendingRequests = useMemo(
-    () => pendingRequests.filter((request) => filteredUserIds.has(request.userId)),
-    [filteredUserIds, pendingRequests]
-  );
+  const filteredUserIds = useMemo(() => new Set(filteredUsers.map((u) => u.id)), [filteredUsers]);
+  const visibleSelectedIds = useMemo(() => [...selectedIds].filter((id) => filteredUserIds.has(id)), [filteredUserIds, selectedIds]);
+  const visiblePendingRequests = useMemo(() => pendingRequests.filter((r) => filteredUserIds.has(r.userId)), [filteredUserIds, pendingRequests]);
 
-  const activeUsers = filteredUsers.filter((user) => user.status === "Active").length;
-  const usersWithAdminAccess = filteredUsers.filter((user) =>
-    DOMAINS.some((domain) => user.permissions[domain] === "Admin")
-  ).length;
-  const usersWithEditAccess = filteredUsers.filter((user) =>
-    DOMAINS.some((domain) => user.permissions[domain] === "Edit")
-  ).length;
+  const activeCount = filteredUsers.filter((u) => u.status === "Active").length;
+  const pendingCount = visiblePendingRequests.length;
 
-  // Count how many users have multi-scope access in the current view
-  const multiScopeCount = filteredUsers.filter(
-    (u) => (u.scopeList ?? [u.scope]).length > 1
-  ).length;
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+  };
 
   const toggleSelectAll = () => {
-    if (visibleSelectedIds.length === filteredUsers.length) {
-      setSelectedIds(new Set());
-      return;
-    }
-    setSelectedIds(new Set(filteredUsers.map((user) => user.id)));
+    if (visibleSelectedIds.length === filteredUsers.length) { setSelectedIds(new Set()); return; }
+    setSelectedIds(new Set(filteredUsers.map((u) => u.id)));
   };
 
-  const toggleSelect = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const handleBulkRemove = () => {
-    if (
-      confirm(
-        `Are you sure you want to permanently delete ${visibleSelectedIds.length} users? This is irreversible.`
-      )
-    ) {
-      removeUsers(visibleSelectedIds);
-      setSelectedIds(new Set());
+    if (confirm(`Permanently delete ${visibleSelectedIds.length} users? This is irreversible.`)) {
+      removeUsers(visibleSelectedIds); setSelectedIds(new Set());
     }
   };
 
@@ -262,315 +202,227 @@ export default function AccessGovernancePage() {
     setSelectedIds(new Set());
   };
 
-  const handleBulkRoleApply = () => {
-    bulkChangeRole(visibleSelectedIds, "Current Admin", bulkRole);
-    setSelectedIds(new Set());
-  };
-
-  const handleApproveUserRequests = (userId: string) => {
-    (pendingRequestsByUser[userId] ?? []).forEach((request) => {
-      processAccessRequest(request.id, "Approved");
-    });
-  };
-
-  const hasActiveGlobalFilter =
-    filters.filterOrg !== ALL_ORGANISATIONS ||
-    filters.filterBrand !== "All Brands" ||
-    filters.filterLocation !== "All Locations";
+  // Active filter count badge (Status, Role, Domain, Level only — scope comes from global navbar)
+  const activeFilterCount = [
+    filters.status !== "All Statuses",
+    filters.role !== "All Roles",
+    filters.domain !== "All Domains",
+    filters.level !== "All Levels",
+  ].filter(Boolean).length;
 
   return (
     <>
-      <div className="space-y-6 pb-24">
-        {/* ── Hero ─────────────────────────────────────────────────────────── */}
-        <section className="rounded-[28px] border border-slate-200 bg-white px-6 py-5 shadow-sm">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">
-                Access Governance
-              </p>
-              <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">
-                Organize users by scope, access, and approval state
-              </h1>
-              <p className="mt-2 max-w-3xl text-sm font-medium text-slate-500">
-                Use the global scope filter below to narrow by organisation, brand, or location.
-                Switch your viewer role between Super&nbsp;Admin and Owner to simulate what each
-                persona sees.
-              </p>
-            </div>
+      <div className="flex flex-col gap-0 pb-24">
 
-            <div className="flex flex-wrap items-center gap-3">
-              <ScopePill label="Visible Users" value={String(filteredUsers.length)} tone="indigo" />
-              <ScopePill label="Multi-Scope" value={String(multiScopeCount)} tone="violet" />
-              <button
-                onClick={() => setIsInviteOpen(true)}
-                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-slate-800"
-              >
-                <UserPlus size={15} /> Invite User
-              </button>
-            </div>
-          </div>
-        </section>
+        {/* ── Command Bar ───────────────────────────────────────────────────── */}
+        <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-6 py-3 backdrop-blur-sm">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
 
-        {/* ── Global Filter Bar ─────────────────────────────────────────────── */}
-        <section className="rounded-[28px] border border-indigo-100 bg-gradient-to-br from-slate-50 to-indigo-50/40 shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100/80 px-6 py-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white">
-                <Building2 size={14} />
+            {/* Left: Title + scope info */}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
+                  <ShieldCheck size={18} />
+                </div>
+                <div>
+                  <h1 className="text-[15px] font-bold text-slate-900">User Access Governance</h1>
+                  <p className="text-[11px] font-medium text-slate-400">
+                    {filteredUsers.length.toLocaleString()} users visible · use the top bar to filter by org, brand, or location
+                  </p>
+                </div>
               </div>
-              <span className="text-sm font-bold text-slate-800">Global Scope Filter</span>
-              {hasActiveGlobalFilter && (
-                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-bold text-indigo-700">
-                  Active
-                </span>
-              )}
             </div>
-            <div className="flex items-center gap-2">
-              {/* Viewer Role Toggle */}
-              <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+
+            {/* Right: Viewer role + actions */}
+            <div className="flex shrink-0 items-center gap-2">
+              {/* Viewer role */}
+              <div className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
                 {(["Super Admin", "Owner"] as ViewerRole[]).map((vr) => (
                   <button
                     key={vr}
                     onClick={() => setFilters({ viewerRole: vr })}
-                    className={`rounded-lg px-3 py-1.5 text-[12px] font-bold transition-all ${
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-bold transition-all ${
                       filters.viewerRole === vr
                         ? vr === "Super Admin"
                           ? "bg-slate-900 text-white shadow-sm"
                           : "bg-violet-600 text-white shadow-sm"
-                        : "text-slate-500 hover:text-slate-800"
+                        : "text-slate-500 hover:text-slate-700"
                     }`}
                   >
                     {vr}
                   </button>
                 ))}
               </div>
-              {hasActiveGlobalFilter && (
+
+              {/* Filter drawer trigger */}
+              <div className="relative" ref={filterDrawerRef}>
                 <button
-                  onClick={() =>
-                    setFilters({
-                      filterOrg: ALL_ORGANISATIONS,
-                      filterBrand: "All Brands",
-                      filterLocation: "All Locations",
-                    })
-                  }
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-[12px] font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+                  onClick={() => setIsFilterOpen((o) => !o)}
+                  className={`relative inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-[13px] font-semibold transition-colors ${
+                    activeFilterCount > 0
+                      ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
                 >
-                  <X size={13} /> Clear
+                  <SlidersHorizontal size={14} />
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-600 text-[9px] font-black text-white">
+                      {activeFilterCount}
+                    </span>
+                  )}
                 </button>
-              )}
+
+                {/* Filter Drawer */}
+                {isFilterOpen && (
+                  <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_8px_32px_rgba(15,23,42,0.12)]">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-widest text-slate-500">Narrow Results</span>
+                      {activeFilterCount > 0 && (
+                        <button
+                          onClick={() => { resetFilters(); }}
+                          className="text-[11px] font-bold text-rose-500 hover:text-rose-700"
+                        >
+                          Clear all
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-3">
+                      <DrawerSelect
+                        label="Status"
+                        value={filters.status}
+                        options={STATUS_OPTIONS}
+                        onChange={(v) => setFilters({ status: v as typeof filters.status })}
+                      />
+                      <DrawerSelect
+                        label="Role"
+                        value={filters.role}
+                        options={ROLE_OPTIONS}
+                        onChange={(v) => setFilters({ role: v as typeof filters.role })}
+                      />
+                      <DrawerSelect
+                        label="Domain"
+                        value={filters.domain}
+                        options={DOMAIN_OPTIONS}
+                        onChange={(v) => setFilters({ domain: v as typeof filters.domain })}
+                      />
+                      <DrawerSelect
+                        label="Access Level"
+                        value={filters.level}
+                        options={LEVEL_OPTIONS}
+                        onChange={(v) => setFilters({ level: v as typeof filters.level })}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Search */}
+              <div className="relative hidden xl:block">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search users…"
+                  value={filters.search}
+                  onChange={(e) => setFilters({ search: e.target.value })}
+                  className="h-9 w-52 rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 text-[13px] text-slate-900 placeholder-slate-400 outline-none transition-all focus:w-64 focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+
+              {/* Invite */}
+              <button
+                onClick={() => setIsInviteOpen(true)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-[13px] font-bold text-white shadow-sm transition-colors hover:bg-indigo-700"
+              >
+                <UserPlus size={14} /> Invite User
+              </button>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-end gap-4 px-6 py-4">
-            {/* Org */}
-            <ScopeFilterSelect
-              icon={<Building2 size={13} className="text-indigo-500" />}
-              label="Organisation"
-              value={filters.filterOrg}
-              options={filterBarOptions.organizations}
-              onChange={(val) =>
-                setFilters({
-                  filterOrg: val,
-                  filterBrand: "All Brands",
-                  filterLocation: "All Locations",
-                })
-              }
+          {/* Mobile search */}
+          <div className="relative mt-2 xl:hidden">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search users…"
+              value={filters.search}
+              onChange={(e) => setFilters({ search: e.target.value })}
+              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 text-[13px] text-slate-900 placeholder-slate-400 outline-none focus:border-indigo-400 focus:bg-white"
             />
+          </div>
+        </div>
 
-            {/* Brand */}
-            <ScopeFilterSelect
-              icon={<Tag size={13} className="text-amber-500" />}
-              label="Brand"
-              value={filters.filterBrand}
-              options={filterBarOptions.brands}
-              onChange={(val) =>
-                setFilters({ filterBrand: val, filterLocation: "All Locations" })
-              }
-              disabled={filterBarOptions.brands.length <= 1}
-            />
-
-            {/* Location */}
-            <ScopeFilterSelect
-              icon={<MapPin size={13} className="text-emerald-500" />}
-              label="Location"
-              value={filters.filterLocation}
-              options={filterBarOptions.locations}
-              onChange={(val) => setFilters({ filterLocation: val })}
-              disabled={filterBarOptions.locations.length <= 1}
-            />
-
-            {/* Active filter chips */}
-            {hasActiveGlobalFilter && (
-              <div className="flex flex-wrap items-center gap-2 pb-0.5">
-                {filters.filterOrg !== ALL_ORGANISATIONS && (
-                  <FilterChip
-                    label={filters.filterOrg}
-                    onRemove={() =>
-                      setFilters({
-                        filterOrg: ALL_ORGANISATIONS,
-                        filterBrand: "All Brands",
-                        filterLocation: "All Locations",
-                      })
-                    }
-                  />
-                )}
-                {filters.filterBrand !== "All Brands" && (
-                  <FilterChip
-                    label={filters.filterBrand}
-                    onRemove={() =>
-                      setFilters({ filterBrand: "All Brands", filterLocation: "All Locations" })
-                    }
-                  />
-                )}
-                {filters.filterLocation !== "All Locations" && (
-                  <FilterChip
-                    label={filters.filterLocation}
-                    onRemove={() => setFilters({ filterLocation: "All Locations" })}
-                  />
-                )}
-              </div>
+        {/* ── Active filter chips (Status / Role / Domain / Level only) ───── */}
+        {activeFilterCount > 0 && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/70 px-6 py-2.5">
+            <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Filtered by:</span>
+            {filters.status !== "All Statuses" && (
+              <Chip label={filters.status} color="slate" onRemove={() => setFilters({ status: "All Statuses" })} />
             )}
+            {filters.role !== "All Roles" && (
+              <Chip label={filters.role} color="slate" onRemove={() => setFilters({ role: "All Roles" })} />
+            )}
+            {filters.domain !== "All Domains" && (
+              <Chip label={filters.domain} color="slate" onRemove={() => setFilters({ domain: "All Domains" })} />
+            )}
+            {filters.level !== "All Levels" && (
+              <Chip label={filters.level} color="slate" onRemove={() => setFilters({ level: "All Levels" })} />
+            )}
+            <button
+              onClick={() => setFilters({ status: "All Statuses", role: "All Roles", domain: "All Domains", level: "All Levels" })}
+              className="ml-1 text-[11px] font-bold text-rose-500 hover:text-rose-700"
+            >
+              Clear
+            </button>
           </div>
+        )}
 
-          {/* Viewer Role explanation */}
-          <div className="border-t border-slate-100/80 bg-white/60 px-6 py-3 rounded-b-[28px]">
-            <p className="text-[12px] font-medium text-slate-500">
-              {filters.viewerRole === "Super Admin" ? (
-                <>
-                  <span className="font-bold text-slate-900">Super Admin</span> — sees all users
-                  across every organisation matching the scope filter above.
-                </>
-              ) : (
-                <>
-                  <span className="font-bold text-violet-700">Owner</span> — restricted to users
-                  within <span className="font-bold text-slate-800">{OWNER_ORG}</span> only,
-                  regardless of the scope filter selection.
-                </>
-              )}
-            </p>
-          </div>
-        </section>
-
-        {/* ── Metric Cards ──────────────────────────────────────────────────── */}
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            label="Users In Scope"
-            value={filteredUsers.length}
-            helper="Accounts matching the global scope and page filters"
+        {/* ── Stats strip ───────────────────────────────────────────────────── */}
+        <div className="grid grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 xl:grid-cols-4">
+          <StatCell label="In Scope" value={filteredUsers.length.toLocaleString()} accent />
+          <StatCell label="Active" value={activeCount.toLocaleString()} color="emerald" />
+          <StatCell label="Pending Approvals" value={pendingCount.toLocaleString()} color="amber" />
+          <StatCell
+            label="Viewer Role"
+            value={filters.viewerRole}
+            color={filters.viewerRole === "Owner" ? "violet" : "slate"}
           />
-          <MetricCard
-            label="Active Right Now"
-            value={activeUsers}
-            helper="Users with live access in this view"
-            tone="emerald"
-          />
-          <MetricCard
-            label="Pending Approvals"
-            value={visiblePendingRequests.length}
-            helper="Requests waiting for approval or denial"
-            tone="amber"
-          />
-          <MetricCard
-            label="Elevated Access"
-            value={`${usersWithAdminAccess} admin / ${usersWithEditAccess} edit`}
-            helper="Users holding edit or admin permissions in scope"
-            tone="violet"
-          />
-        </section>
+        </div>
 
-        {/* ── User Directory + Approval Queue ───────────────────────────────── */}
-        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_420px]">
-          <div className="rounded-[28px] border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-100 px-6 py-5">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">Scoped User Directory</h2>
-                  <p className="mt-1 text-sm font-medium text-slate-500">
-                    Narrow further by role, status, domain, and permission level. Users with
-                    multi-brand or multi-location access appear when any of their scopes match.
-                  </p>
-                </div>
+        {/* ── Main content: table + sidebar ─────────────────────────────────── */}
+        <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
 
-                <div className="flex flex-wrap items-center gap-3">
-                  <FilterSelect
-                    label="Status"
-                    value={filters.status}
-                    onChange={(value) => setFilters({ status: value as typeof filters.status })}
-                    options={STATUS_OPTIONS}
-                  />
-                  <FilterSelect
-                    label="Role"
-                    value={filters.role}
-                    onChange={(value) => setFilters({ role: value as typeof filters.role })}
-                    options={ROLE_OPTIONS}
-                  />
-                  <FilterSelect
-                    label="Domain"
-                    value={filters.domain}
-                    onChange={(value) => setFilters({ domain: value as typeof filters.domain })}
-                    options={DOMAIN_OPTIONS}
-                  />
-                  <FilterSelect
-                    label="Access"
-                    value={filters.level}
-                    onChange={(value) => setFilters({ level: value as typeof filters.level })}
-                    options={LEVEL_OPTIONS}
-                  />
-                  <FilterSelect
-                    label="Sort By"
-                    value={sortBy}
-                    onChange={(value) => setSortBy(value as "Name" | "Organisation" | "Role" | "Status")}
-                    options={["Organisation", "Name", "Role", "Status"]}
-                  />
-                  <button
-                    onClick={resetFilters}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100"
-                  >
-                    <FilterX size={15} /> Reset All
-                  </button>
-                </div>
-              </div>
-            </div>
-
+          {/* Table */}
+          <div className="min-w-0 flex-1">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1020px] border-collapse text-left">
+              <table className="w-full min-w-[860px] border-collapse text-left">
                 <thead>
-                  <tr className="border-b border-slate-100 bg-slate-50">
-                    <th className="w-12 py-4 pl-6 pr-3">
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="w-10 py-3 pl-6 pr-2">
                       <button
                         onClick={toggleSelectAll}
                         className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${
-                          visibleSelectedIds.length === filteredUsers.length &&
-                          filteredUsers.length > 0
+                          visibleSelectedIds.length === filteredUsers.length && filteredUsers.length > 0
                             ? "border-indigo-600 bg-indigo-600"
                             : "border-slate-300 bg-white hover:border-indigo-400"
                         }`}
                       >
-                        {visibleSelectedIds.length === filteredUsers.length &&
-                          filteredUsers.length > 0 && (
-                            <Check size={12} className="text-white" />
-                          )}
+                        {visibleSelectedIds.length === filteredUsers.length && filteredUsers.length > 0 && (
+                          <Check size={10} className="text-white" />
+                        )}
                       </button>
                     </th>
-                    <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                      User
+                    <SortTh label="User" sortK="name" current={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortTh label="Organisation" sortK="org" current={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortTh label="Role" sortK="role" current={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <th className="px-3 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                      Access
                     </th>
-                    <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                      Scope / Access
-                    </th>
-                    <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                      Role
-                    </th>
-                    <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                      Permissions
-                    </th>
-                    <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                      Status
-                    </th>
-                    <th className="px-3 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    <SortTh label="Status" sortK="status" current={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <th className="px-3 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">
                       Requests
                     </th>
-                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    <th className="py-3 pl-3 pr-6 text-[10px] font-bold uppercase tracking-widest text-slate-400">
                       Actions
                     </th>
                   </tr>
@@ -578,134 +430,125 @@ export default function AccessGovernancePage() {
                 <tbody className="divide-y divide-slate-100">
                   {filteredUsers.length === 0 ? (
                     <tr>
-                      <td
-                        colSpan={8}
-                        className="px-6 py-14 text-center text-sm font-medium text-slate-500"
-                      >
-                        No users match the selected scope, role, and access filters.
+                      <td colSpan={8} className="px-6 py-20 text-center">
+                        <div className="flex flex-col items-center gap-3">
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
+                            <Filter size={20} className="text-slate-400" />
+                          </div>
+                          <p className="text-sm font-semibold text-slate-500">No users match your filters</p>
+                          <button onClick={resetFilters} className="text-xs font-bold text-indigo-600 hover:text-indigo-800">
+                            Reset all filters
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ) : (
-                    filteredUsers.map((user) => {
+                    pagedUsers.map((user) => {
                       const requestCount = pendingRequestsByUser[user.id]?.length ?? 0;
-                      const accessSummary = summarizeAccess(user);
+                      const access = summarizeAccess(user);
                       const scopeList = user.scopeList ?? [user.scope];
-                      const isMultiScope = scopeList.length > 1;
+                      const isSelected = selectedIds.has(user.id);
 
                       return (
                         <tr
                           key={user.id}
-                          className={`group transition-colors hover:bg-slate-50 ${
-                            selectedIds.has(user.id) ? "bg-indigo-50/40" : ""
-                          }`}
+                          className={`group transition-colors hover:bg-slate-50/80 ${isSelected ? "bg-indigo-50/60" : ""}`}
                         >
-                          <td className="py-4 pl-6 pr-3">
+                          {/* Checkbox */}
+                          <td className="py-3.5 pl-6 pr-2">
                             <button
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                toggleSelect(user.id);
-                              }}
-                              className={`mt-1 flex h-4 w-4 items-center justify-center rounded border transition-colors ${
-                                selectedIds.has(user.id)
-                                  ? "border-indigo-600 bg-indigo-600"
-                                  : "border-slate-300 bg-white hover:border-indigo-400"
+                              onClick={(e) => { e.stopPropagation(); toggleSelect(user.id); }}
+                              className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${
+                                isSelected ? "border-indigo-600 bg-indigo-600" : "border-slate-300 bg-white hover:border-indigo-400"
                               }`}
                             >
-                              {selectedIds.has(user.id) && (
-                                <Check size={12} className="text-white" />
-                              )}
+                              {isSelected && <Check size={10} className="text-white" />}
                             </button>
                           </td>
-                          <td
-                            className="cursor-pointer px-3 py-4"
-                            onClick={() => setActiveUserId(user.id)}
-                          >
-                            <div className="flex items-center gap-3">
-                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-100 to-violet-100 text-xs font-bold text-indigo-700 ring-2 ring-white shadow-sm">
-                                {user.firstName[0]}
-                                {user.lastName[0]}
+
+                          {/* User */}
+                          <td className="cursor-pointer px-3 py-3.5" onClick={() => setActiveUserId(user.id)}>
+                            <div className="flex items-center gap-2.5">
+                              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-100 to-violet-100 text-[11px] font-black text-indigo-700">
+                                {user.firstName[0]}{user.lastName[0]}
                               </div>
-                              <div>
-                                <div className="font-semibold text-slate-900 transition-colors group-hover:text-indigo-600">
+                              <div className="min-w-0">
+                                <div className="truncate text-[13px] font-semibold text-slate-900 transition-colors group-hover:text-indigo-600">
                                   {user.firstName} {user.lastName}
                                 </div>
-                                <div className="text-xs font-medium text-slate-500">
-                                  {user.email}
-                                </div>
+                                <div className="truncate text-[11px] text-slate-400">{user.email}</div>
                               </div>
                             </div>
                           </td>
-                          <td className="px-3 py-4">
-                            <div className="text-xs font-semibold text-slate-700">
+
+                          {/* Org */}
+                          <td className="px-3 py-3.5">
+                            <div className="text-[12px] font-semibold text-slate-700 ">
                               {formatScopeListLabel(scopeList)}
                             </div>
-                            {isMultiScope && (
-                              <div className="mt-1 flex items-center gap-1">
-                                <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-600">
-                                  <Building2 size={9} />
-                                  {scopeList.length} scopes
-                                </span>
-                              </div>
-                            )}
-                            {!isMultiScope && (
-                              <div className="mt-1 text-[11px] text-slate-400">
-                                {formatScopeLabel(user.scope)}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-3 py-4">
-                            <span className="inline-flex rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 shadow-sm">
-                              {user.role}
-                            </span>
-                          </td>
-                          <td className="px-3 py-4">
-                            <div className="flex flex-wrap gap-1.5">
-                              <AccessCountChip
-                                label="Admin"
-                                value={accessSummary.admin}
-                                tone="slate"
-                              />
-                              <AccessCountChip
-                                label="Edit"
-                                value={accessSummary.edit}
-                                tone="amber"
-                              />
-                              <AccessCountChip
-                                label="View"
-                                value={accessSummary.view}
-                                tone="emerald"
-                              />
-                            </div>
-                          </td>
-                          <td className="px-3 py-4">
-                            <StatusBadge status={user.status} />
-                          </td>
-                          <td className="px-3 py-4">
-                            {requestCount > 0 ? (
-                              <button
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleApproveUserRequests(user.id);
-                                }}
-                                className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800 transition-colors hover:bg-amber-200"
-                              >
-                                <ShieldAlert size={12} /> Approve {requestCount}
-                              </button>
-                            ) : (
-                              <span className="text-xs font-medium text-slate-400">
-                                No pending
+                            {(user.scopeList ?? []).length > 1 && (
+                              <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-600">
+                                🏢 {(user.scopeList ?? []).length} scopes
                               </span>
                             )}
                           </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => setActiveUserId(user.id)}
-                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50"
-                              >
-                                Manage
-                              </button>
+
+                          {/* Role */}
+                          <td className="px-3 py-3.5">
+                            <RoleBadge role={user.role} />
+                          </td>
+
+                          {/* Access summary */}
+                          <td className="px-3 py-3.5">
+                            <div className="flex items-center gap-1">
+                              {access.admin > 0 && (
+                                <span className="rounded-md bg-slate-900 px-1.5 py-0.5 text-[10px] font-black text-white">
+                                  {access.admin}A
+                                </span>
+                              )}
+                              {access.edit > 0 && (
+                                <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-black text-amber-800">
+                                  {access.edit}E
+                                </span>
+                              )}
+                              {access.view > 0 && (
+                                <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-black text-emerald-800">
+                                  {access.view}V
+                                </span>
+                              )}
+                              {access.admin === 0 && access.edit === 0 && access.view === 0 && (
+                                <span className="text-[11px] text-slate-300">—</span>
+                              )}
                             </div>
+                          </td>
+
+                          {/* Status */}
+                          <td className="px-3 py-3.5">
+                            <StatusBadge status={user.status} />
+                          </td>
+
+                          {/* Requests */}
+                          <td className="px-3 py-3.5">
+                            {requestCount > 0 ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); (pendingRequestsByUser[user.id] ?? []).forEach((r) => processAccessRequest(r.id, "Approved")); }}
+                                className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-800 transition-colors hover:bg-amber-200"
+                              >
+                                <ShieldAlert size={10} /> {requestCount}
+                              </button>
+                            ) : (
+                              <span className="text-[11px] text-slate-300">—</span>
+                            )}
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-3.5 pl-3 pr-6">
+                            <button
+                              onClick={() => setActiveUserId(user.id)}
+                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-600 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+                            >
+                              Manage
+                            </button>
                           </td>
                         </tr>
                       );
@@ -714,240 +557,144 @@ export default function AccessGovernancePage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3">
+                <p className="text-[12px] font-medium text-slate-500">
+                  <span className="font-bold text-slate-900">{(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredUsers.length)}</span>{" "}
+                  of <span className="font-bold text-slate-900">{filteredUsers.length.toLocaleString()}</span>
+                </p>
+                <div className="flex items-center gap-1">
+                  <PagBtn onClick={() => setCurrentPage(1)} disabled={safePage === 1} label="«" />
+                  <PagBtn onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={safePage === 1} label="‹" />
+                  {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                    let s = Math.max(1, safePage - 3);
+                    const e = Math.min(totalPages, s + 6);
+                    s = Math.max(1, e - 6);
+                    return s + i;
+                  }).filter((pg) => pg <= totalPages).map((pg) => (
+                    <button
+                      key={pg}
+                      onClick={() => setCurrentPage(pg)}
+                      className={`h-7 w-7 rounded-lg border text-[12px] font-bold transition-colors ${
+                        pg === safePage
+                          ? "border-indigo-600 bg-indigo-600 text-white"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      {pg}
+                    </button>
+                  ))}
+                  <PagBtn onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages} label="›" />
+                  <PagBtn onClick={() => setCurrentPage(totalPages)} disabled={safePage === totalPages} label="»" />
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* ── Approval Queue + Info ─────────────────────────────────────────  */}
-          <aside className="space-y-6">
-            <div className="rounded-[28px] border border-amber-200/70 bg-gradient-to-br from-amber-50 to-orange-50 p-6 shadow-sm">
-              <div className="flex items-start justify-between gap-4">
+          {/* ── Sidebar: Approval Queue ──────────────────────────────────────── */}
+          <aside className="w-full shrink-0 border-t border-slate-200 xl:w-[340px] xl:border-l xl:border-t-0">
+            <div className="sticky top-[57px] p-5">
+              <div className="mb-4 flex items-center justify-between">
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.22em] text-amber-500">
-                    Approval Queue
-                  </p>
-                  <h2 className="mt-2 text-lg font-bold text-amber-950">
-                    Requests inside this scope
-                  </h2>
-                  <p className="mt-2 text-sm font-medium text-amber-800/80">
-                    Review the users asking for more access in the currently selected org, brand,
-                    or location.
-                  </p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-500">Approval Queue</p>
+                  <h2 className="mt-0.5 text-[15px] font-bold text-slate-900">Pending Requests</h2>
                 </div>
-                <div className="rounded-2xl bg-white/70 px-3 py-2 text-right shadow-sm">
-                  <div className="text-xl font-black text-amber-900">
-                    {visiblePendingRequests.length}
-                  </div>
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-amber-600">
-                    Pending
-                  </div>
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-lg font-black text-amber-800">
+                  {pendingCount}
                 </div>
               </div>
 
-              <div className="mt-5 space-y-3">
+              <div className="space-y-3">
                 {visiblePendingRequests.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-amber-200 bg-white/60 px-4 py-6 text-center text-sm font-medium text-amber-800/80">
-                    No requests are waiting in this scope.
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center">
+                    <p className="text-[12px] font-medium text-slate-400">No pending requests in this scope</p>
                   </div>
                 ) : (
                   visiblePendingRequests.slice(0, 6).map((request) => {
-                    const user = users.find((item) => item.id === request.userId);
+                    const user = users.find((u) => u.id === request.userId);
                     if (!user) return null;
-
                     return (
-                      <div
-                        key={request.id}
-                        className="rounded-2xl border border-amber-200/70 bg-white/80 p-4 shadow-sm"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-bold text-slate-900">
+                      <div key={request.id} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-[13px] font-bold text-slate-900">
                               {user.firstName} {user.lastName}
                             </div>
-                            <div className="mt-1 text-xs font-medium text-slate-500">
-                              {request.domain} → {request.requestedLevel} ·{" "}
-                              {user.scope.location === "All Locations"
-                                ? user.scope.brand
-                                : user.scope.location}
+                            <div className="mt-0.5 text-[11px] font-medium text-slate-500">
+                              {request.domain} → <span className="font-bold text-slate-700">{request.requestedLevel}</span>
                             </div>
                           </div>
                           <button
                             onClick={() => setActiveUserId(user.id)}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 transition-colors hover:bg-slate-50"
+                            className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-100"
                           >
-                            Open
+                            View
                           </button>
                         </div>
-                        <p className="mt-3 text-xs font-medium leading-relaxed text-slate-600">
-                          {request.reason}
-                        </p>
-                        <div className="mt-4 flex items-center gap-2">
+                        {request.reason && (
+                          <p className="mt-2 rounded-lg bg-slate-50 px-2.5 py-2 text-[11px] leading-relaxed text-slate-600">
+                            {request.reason}
+                          </p>
+                        )}
+                        <div className="mt-3 flex items-center gap-2">
                           <button
                             onClick={() => processAccessRequest(request.id, "Approved")}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700"
+                            className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white transition-colors hover:bg-emerald-700"
                           >
-                            <UserCheck size={13} /> Approve
+                            <UserCheck size={11} /> Approve
                           </button>
                           <button
                             onClick={() => processAccessRequest(request.id, "Denied")}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition-colors hover:bg-rose-100"
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 transition-colors hover:bg-rose-100"
                           >
-                            <Ban size={13} /> Deny
+                            <Ban size={11} /> Deny
                           </button>
                         </div>
                       </div>
                     );
                   })
                 )}
-              </div>
-            </div>
-
-            <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
-              <p className="text-xs font-bold uppercase tracking-[0.22em] text-slate-400">
-                What This View Gives You
-              </p>
-              <div className="mt-4 space-y-4 text-sm font-medium text-slate-600">
-                <InfoRow
-                  icon={<Shield size={15} className="text-slate-700" />}
-                  title="Multi-scope visibility"
-                  copy="Users with access to multiple brands or locations appear whenever any of their scopes matches your selected filter — shown with a scope count badge."
-                />
-                <InfoRow
-                  icon={<KeyRound size={15} className="text-amber-600" />}
-                  title="Viewer role simulation"
-                  copy="Toggle between Super Admin (full cross-org visibility) and Owner (restricted to your org only) to preview what each persona sees."
-                />
-                <InfoRow
-                  icon={<Mail size={15} className="text-indigo-600" />}
-                  title="Fast approval and edits"
-                  copy="Approve requests from the queue or open any user to change scope, role, or permissions in the side drawer."
-                />
+                {visiblePendingRequests.length > 6 && (
+                  <p className="pt-1 text-center text-[11px] font-semibold text-slate-400">
+                    +{visiblePendingRequests.length - 6} more — filter to a specific scope
+                  </p>
+                )}
               </div>
             </div>
           </aside>
-        </section>
-
-        {/* ── Access Matrix ─────────────────────────────────────────────────── */}
-        <section className="rounded-[28px] border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-100 px-6 py-5">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Access Matrix</h2>
-                <p className="mt-1 text-sm font-medium text-slate-500">
-                  Review exactly which domains each visible user can access in the current scope.
-                </p>
-              </div>
-              <div className="text-sm font-semibold text-slate-500">
-                {filteredUsers.length} users ·{" "}
-                {filters.viewerRole === "Owner"
-                  ? `Owner view (${OWNER_ORG})`
-                  : "Super Admin view"}
-              </div>
-            </div>
-          </div>
-
-          <div className="max-h-[560px] overflow-auto">
-            <table className="w-full min-w-[1180px] border-collapse text-left">
-              <thead className="sticky top-0 z-10 bg-slate-50">
-                <tr className="border-b border-slate-100">
-                  <th className="sticky left-0 z-20 w-[280px] bg-slate-50 px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                    User
-                  </th>
-                  {DOMAINS.map((domain) => (
-                    <th
-                      key={domain}
-                      className="px-3 py-4 text-center text-[10px] font-bold uppercase tracking-widest text-slate-400"
-                    >
-                      {domain}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredUsers.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={DOMAINS.length + 1}
-                      className="px-6 py-14 text-center text-sm font-medium text-slate-500"
-                    >
-                      No users available for the current access matrix.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredUsers.map((user) => (
-                    <tr key={`matrix-${user.id}`} className="hover:bg-slate-50/70">
-                      <td className="sticky left-0 z-10 bg-white px-6 py-4 shadow-[6px_0_14px_rgba(15,23,42,0.03)]">
-                        <button
-                          onClick={() => setActiveUserId(user.id)}
-                          className="text-left transition-colors hover:text-indigo-600"
-                        >
-                          <div className="font-semibold text-slate-900">
-                            {user.firstName} {user.lastName}
-                          </div>
-                          <div className="mt-1 text-xs font-medium text-slate-500">
-                            {user.role} · {formatScopeListLabel(user.scopeList ?? [user.scope])}
-                          </div>
-                        </button>
-                      </td>
-                      {DOMAINS.map((domain) => (
-                        <td key={`${user.id}-${domain}`} className="px-3 py-4 text-center">
-                          <PermissionCell level={user.permissions[domain]} />
-                        </td>
-                      ))}
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        </div>
       </div>
 
-      {/* ── Bulk Action Bar ───────────────────────────────────────────────── */}
+      {/* ── Bulk Action Bar ─────────────────────────────────────────────────── */}
       {visibleSelectedIds.length > 0 && (
-        <div className="fade-in-up fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-full bg-slate-900 px-5 py-3 shadow-[0_20px_40px_rgba(15,23,42,0.3)]">
-          <div className="border-r border-slate-700 pr-4 text-sm font-bold text-white">
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-slate-700 bg-slate-900 px-4 py-2.5 shadow-[0_20px_40px_rgba(15,23,42,0.4)]">
+          <div className="border-r border-slate-700 pr-3 text-[13px] font-bold text-white">
             {visibleSelectedIds.length} selected
           </div>
-          <div className="flex items-center gap-2">
-            <select
-              value={bulkRole}
-              onChange={(event) => setBulkRole(event.target.value as UserRole)}
-              className="h-9 rounded-full border border-slate-700 bg-slate-800 px-3 text-xs font-semibold text-slate-100 outline-none"
-              aria-label="Bulk role change"
-            >
-              {ROLE_OPTIONS.filter((role) => role !== "All Roles").map((role) => (
-                <option key={role} value={role}>
-                  {role}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={handleBulkRoleApply}
-              className="rounded-full px-3 py-1.5 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
-            >
-              Change Role
-            </button>
-            <button
-              onClick={() => {
-                resendInvites(visibleSelectedIds);
-                setSelectedIds(new Set());
-              }}
-              className="rounded-full px-3 py-1.5 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
-            >
-              Resend Invites
-            </button>
-            <button
-              onClick={handleBulkSuspend}
-              className="rounded-full px-3 py-1.5 text-xs font-bold text-amber-300 transition-colors hover:bg-slate-800 hover:text-amber-200"
-            >
-              Suspend
-            </button>
-            <button
-              onClick={handleBulkRemove}
-              className="rounded-full bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-300 transition-colors hover:bg-slate-800 hover:text-rose-200"
-            >
-              Remove
-            </button>
-          </div>
+          <select
+            value={bulkRole}
+            onChange={(e) => setBulkRole(e.target.value as UserRole)}
+            className="h-8 rounded-full border border-slate-700 bg-slate-800 px-2.5 text-[12px] font-semibold text-slate-100 outline-none"
+          >
+            {ROLE_OPTIONS.filter((r) => r !== "All Roles").map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <button onClick={() => { bulkChangeRole(visibleSelectedIds, "Current Admin", bulkRole); setSelectedIds(new Set()); }} className="text-[12px] font-bold text-slate-300 hover:text-white">
+            Change Role
+          </button>
+          <button onClick={() => { resendInvites(visibleSelectedIds); setSelectedIds(new Set()); }} className="text-[12px] font-bold text-slate-300 hover:text-white">
+            Resend
+          </button>
+          <button onClick={handleBulkSuspend} className="text-[12px] font-bold text-amber-300 hover:text-amber-200">
+            Suspend
+          </button>
+          <button onClick={handleBulkRemove} className="text-[12px] font-bold text-rose-400 hover:text-rose-300">
+            Remove
+          </button>
+          <button onClick={() => setSelectedIds(new Set())} className="ml-1 rounded-full p-1 text-slate-400 hover:text-white">
+            <X size={13} />
+          </button>
         </div>
       )}
 
@@ -962,246 +709,147 @@ export default function AccessGovernancePage() {
   );
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
-function ScopeFilterSelect({
-  icon,
-  label,
-  value,
-  options,
-  onChange,
-  disabled = false,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (val: string) => void;
-  disabled?: boolean;
+function CmdScopeSelect({ icon, label, value, options, onChange, disabled = false, active = false }: {
+  icon: ReactNode; label: string; value: string; options: string[];
+  onChange: (v: string) => void; disabled?: boolean; active?: boolean;
 }) {
   return (
-    <label className="flex flex-col gap-1.5">
-      <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-        {icon}
-        {label}
-      </span>
-      <div
-        className={`relative flex items-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-colors ${
-          disabled
-            ? "border-slate-100 bg-slate-50 text-slate-300"
-            : "border-slate-200 bg-white text-slate-800 shadow-sm hover:border-indigo-300 hover:bg-indigo-50/30"
-        }`}
+    <div className={`relative flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition-colors ${
+      disabled ? "border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed"
+        : active ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+        : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+    }`}>
+      {icon}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="cursor-pointer appearance-none bg-transparent pr-4 outline-none disabled:cursor-not-allowed"
+        aria-label={`Filter by ${label}`}
       >
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className="cursor-pointer appearance-none bg-transparent pr-6 outline-none disabled:cursor-default"
-          aria-label={`Filter by ${label}`}
-        >
-          {options.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          size={13}
-          className={`pointer-events-none absolute right-3 ${disabled ? "text-slate-200" : "text-slate-400"}`}
-        />
-      </div>
-    </label>
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+      <ChevronDown size={11} className="pointer-events-none absolute right-2 text-current opacity-60" />
+    </div>
   );
 }
 
-function FilterChip({
-  label,
-  onRemove,
-}: {
-  label: string;
-  onRemove: () => void;
+function DrawerSelect({ label, value, options, onChange }: {
+  label: string; value: string; options: string[]; onChange: (v: string) => void;
 }) {
+  const isActive = value !== options[0];
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[12px] font-bold text-indigo-700">
-      {label}
-      <button
-        onClick={onRemove}
-        className="rounded-full p-0.5 transition-colors hover:bg-indigo-100"
-        aria-label={`Remove ${label} filter`}
+    <div>
+      <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`w-full rounded-lg border px-3 py-2 text-[13px] font-semibold outline-none transition-colors ${
+          isActive ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-slate-50 text-slate-700"
+        } focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100`}
       >
-        <X size={10} />
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function SortTh({ label, sortK, current, dir, onSort }: {
+  label: string; sortK: SortKey; current: SortKey; dir: SortDir; onSort: (k: SortKey) => void;
+}) {
+  const isActive = current === sortK;
+  return (
+    <th className="px-3 py-3">
+      <button
+        onClick={() => onSort(sortK)}
+        className={`flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+          isActive ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+        }`}
+      >
+        {label}
+        {isActive ? (
+          dir === "asc" ? <ChevronUp size={11} /> : <ChevronDown size={11} />
+        ) : (
+          <ArrowUpDown size={10} className="opacity-30" />
+        )}
+      </button>
+    </th>
+  );
+}
+
+function Chip({ label, color, onRemove }: { label: string; color: "indigo" | "amber" | "emerald" | "slate"; onRemove: () => void }) {
+  const cls = {
+    indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    slate: "border-slate-200 bg-slate-100 text-slate-600",
+  }[color];
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${cls}`}>
+      {label}
+      <button onClick={onRemove} className="ml-0.5 rounded-full hover:opacity-70" aria-label={`Remove ${label}`}>
+        <X size={9} />
       </button>
     </span>
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  helper,
-  tone = "slate",
-}: {
-  label: string;
-  value: number | string;
-  helper: string;
-  tone?: "slate" | "emerald" | "amber" | "violet";
-}) {
-  const tones = {
-    slate: "border-slate-200 bg-white text-slate-900",
-    emerald: "border-emerald-200 bg-emerald-50/70 text-emerald-950",
-    amber: "border-amber-200 bg-amber-50/70 text-amber-950",
-    violet: "border-violet-200 bg-violet-50/70 text-violet-950",
-  } as const;
-
+function StatCell({ label, value, color, accent }: { label: string; value: string; color?: "emerald" | "amber" | "violet" | "slate"; accent?: boolean }) {
+  const cls = {
+    emerald: "text-emerald-700",
+    amber: "text-amber-700",
+    violet: "text-violet-700",
+    slate: "text-slate-900",
+  }[color ?? "slate"];
   return (
-    <div className={`rounded-[24px] border p-5 shadow-sm ${tones[tone]}`}>
-      <p className="text-xs font-bold uppercase tracking-[0.22em] text-slate-400">{label}</p>
-      <div className="mt-3 text-3xl font-black tracking-tight">{value}</div>
-      <p className="mt-2 text-sm font-medium text-slate-500">{helper}</p>
+    <div className={`flex flex-col gap-0.5 px-5 py-3 ${accent ? "bg-indigo-600" : "bg-white"}`}>
+      <span className={`text-[10px] font-bold uppercase tracking-widest ${accent ? "text-indigo-200" : "text-slate-400"}`}>{label}</span>
+      <span className={`text-[20px] font-black leading-none ${accent ? "text-white" : cls}`}>{value}</span>
     </div>
   );
 }
 
-function FilterSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
-}) {
+function RoleBadge({ role }: { role: UserRole }) {
+  const isSuper = role === "Super Admin";
+  const isDir = role === "Organisation Director";
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-        {label}
-      </span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 outline-none transition-colors hover:bg-white"
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function ScopePill({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "slate" | "indigo" | "violet";
-}) {
-  const tones = {
-    slate: "border-slate-200 bg-slate-50 text-slate-700",
-    indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
-    violet: "border-violet-200 bg-violet-50 text-violet-700",
-  } as const;
-
-  return (
-    <div className={`rounded-2xl border px-4 py-2 ${tones[tone]}`}>
-      <div className="text-[10px] font-bold uppercase tracking-widest opacity-70">{label}</div>
-      <div className="mt-1 text-sm font-bold">{value}</div>
-    </div>
-  );
-}
-
-function AccessCountChip({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: "slate" | "amber" | "emerald";
-}) {
-  const tones = {
-    slate: "bg-slate-900 text-white",
-    amber: "bg-amber-100 text-amber-800",
-    emerald: "bg-emerald-100 text-emerald-800",
-  } as const;
-
-  return (
-    <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tones[tone]}`}>
-      {label}: {value}
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${
+      isSuper ? "bg-slate-900 text-white"
+      : isDir ? "bg-violet-100 text-violet-800"
+      : "bg-slate-100 text-slate-700"
+    }`}>
+      {role}
     </span>
   );
 }
 
 function StatusBadge({ status }: { status: UserStatus }) {
-  const tones = {
-    Active: "bg-emerald-100 text-emerald-700",
-    Pending: "bg-amber-100 text-amber-700",
-    Suspended: "bg-rose-100 text-rose-700",
-  } as const;
-
+  const cls = { Active: "bg-emerald-100 text-emerald-700", Pending: "bg-amber-100 text-amber-700", Suspended: "bg-rose-100 text-rose-700" } as const;
+  const dot = { Active: "bg-emerald-500", Pending: "bg-amber-500", Suspended: "bg-rose-500" } as const;
   return (
-    <span
-      className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tones[status]}`}
-    >
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold ${cls[status]}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${dot[status]}`} />
       {status}
     </span>
   );
 }
 
-function PermissionCell({ level }: { level: PermissionLevel }) {
-  const tones = {
-    None: "border-slate-200 bg-slate-50 text-slate-400",
-    View: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    Edit: "border-amber-200 bg-amber-50 text-amber-700",
-    Admin: "border-slate-900 bg-slate-900 text-white",
-  } as const;
-
+function PagBtn({ onClick, disabled, label }: { onClick: () => void; disabled: boolean; label: string }) {
   return (
-    <span
-      className={`inline-flex min-w-[66px] items-center justify-center rounded-full border px-2.5 py-1 text-[11px] font-bold ${tones[level]}`}
-    >
-      {level}
-    </span>
-  );
-}
-
-function InfoRow({
-  icon,
-  title,
-  copy,
-}: {
-  icon: ReactNode;
-  title: string;
-  copy: string;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100">
-        {icon}
-      </div>
-      <div>
-        <div className="font-semibold text-slate-900">{title}</div>
-        <p className="mt-1 leading-relaxed">{copy}</p>
-      </div>
-    </div>
+    <button onClick={onClick} disabled={disabled} className="h-7 w-7 rounded-lg border border-slate-200 bg-white text-[12px] font-bold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30">
+      {label}
+    </button>
   );
 }
 
 function summarizeAccess(user: AppUser) {
-  return DOMAINS.reduce(
-    (summary, domain) => {
-      const level = user.permissions[domain];
-      if (level === "Admin") summary.admin += 1;
-      if (level === "Edit") summary.edit += 1;
-      if (level === "View") summary.view += 1;
-      return summary;
-    },
-    { admin: 0, edit: 0, view: 0 }
-  );
+  return DOMAINS.reduce((s, d) => {
+    const l = user.permissions[d];
+    if (l === "Admin") s.admin++;
+    if (l === "Edit") s.edit++;
+    if (l === "View") s.view++;
+    return s;
+  }, { admin: 0, edit: 0, view: 0 });
 }
