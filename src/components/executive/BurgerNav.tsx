@@ -32,8 +32,14 @@ const navItems: NavItem[] = [
     color: "text-emerald-600",
     children: [
       { label: "Command Dashboard", href: "/finance" },
+      { label: "P&L Performance", href: "/finance/overview" },
       { label: "Revenue & Costs", href: "/finance/revenue-costs" },
       { label: "Cash Flow", href: "/finance/cash-flow" },
+      { label: "Store Profitability", href: "/finance/store-profitability" },
+      { label: "Labor & OpEx", href: "/finance/expenses" },
+      { label: "Payments & Taxes", href: "/finance/payments-taxes" },
+      { label: "Leakage", href: "/finance/leakage" },
+      { label: "Budget vs Actual", href: "/finance/budget-vs-actual" },
     ],
   },
   {
@@ -45,6 +51,7 @@ const navItems: NavItem[] = [
       { label: "Sales Home", href: "/sales" },
       { label: "Channel Breakdown", href: "/sales/channels" },
       { label: "Item Performance", href: "/sales/items" },
+      { label: "Employees", href: "/sales/employees" },
     ],
   },
   {
@@ -55,6 +62,8 @@ const navItems: NavItem[] = [
     children: [
       { label: "Command Center", href: "/inventory" },
       { label: "Current Snapshot", href: "/inventory/current" },
+      { label: "Incoming Supply", href: "/inventory/incoming" },
+      { label: "Alerts & Risks", href: "/inventory/alerts-risks" },
       { label: "Health & Coverage", href: "/inventory/health" },
     ],
   },
@@ -66,6 +75,8 @@ const navItems: NavItem[] = [
     children: [
       { label: "Command Center", href: "/orders" },
       { label: "Consumption Snapshot", href: "/orders/consumption" },
+      { label: "Cross-Flow Summary", href: "/orders/cross-flow" },
+      { label: "Category Performance", href: "/orders/category-performance" },
       { label: "Trends & Forecast", href: "/orders/trends-forecast" },
     ],
   },
@@ -77,7 +88,13 @@ const navItems: NavItem[] = [
     children: [
       { label: "Command Center", href: "/hr" },
       { label: "Workforce Overview", href: "/hr/workforce-overview" },
-      { label: "Labor Cost", href: "/hr/labor-cost" },
+      { label: "Labor Cost & Productivity", href: "/hr/labor-cost" },
+      { label: "Scheduling & Coverage", href: "/hr/scheduling" },
+      { label: "Attendance & Reliability", href: "/hr/attendance" },
+      { label: "Compliance & Risk", href: "/hr/compliance" },
+      { label: "Payroll & Admin", href: "/hr/payroll" },
+      { label: "Hiring & Onboarding", href: "/hr/hiring" },
+      { label: "Role Performance", href: "/hr/role-performance" },
     ],
   },
   {
@@ -87,8 +104,12 @@ const navItems: NavItem[] = [
     color: "text-rose-600",
     children: [
       { label: "Command Center", href: "/customers" },
-      { label: "Loyalty Drivers", href: "/customers/loyalty-drivers" },
+      { label: "Customer Growth", href: "/customers/growth" },
+      { label: "Repeat Rate & Risk", href: "/customers/repeat-rate" },
       { label: "Visit Behavior", href: "/customers/visit-behavior" },
+      { label: "Customer Value", href: "/customers/value" },
+      { label: "Channel & Location", href: "/customers/channel-location" },
+      { label: "Loyalty Drivers", href: "/customers/loyalty-drivers" },
     ],
   },
   {
